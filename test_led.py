@@ -12,7 +12,10 @@ from pyA20.gpio import gpio
 from pyA20.gpio import connector
 from pyA20.gpio import port
 
-led = port.PG6
+led = port.STATUS_LED
+
+gpio.init()
+gpio.setcfg(led, gpio.OUTPUT)
 
 def blink_led(interval=0):
     try:

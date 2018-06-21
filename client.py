@@ -11,13 +11,14 @@ from pyA20.gpio import port
 from pyA20.gpio import connector
 
 default_config = {
-    "rpc_server": "http://127.0.0.1:8181/",
+    "rpc_server": "http://127.0.0.1:8282/",
+    "port": 8181,
     "gpio_inputs": {
         "set": "PA10",
         "reset": "PA9"
     },
     "gpio_outputs": {
-        "led": "PG6"
+        "led": "STATUS_LED"
     },
     "download_dir": "/tmp/download"
 }
@@ -26,7 +27,8 @@ USERPASSWD = 0
 USERDATA = 1
 
 # notice codes from master process
-MASTER_PROCESS_STARTED = 0,
+MATER_READY_FOR_UPDATE = 0
+MASTER_PROCESS_STARTED = 0
 UPDATE_READY_FOR_DOWNLOAD = 1
 DISCOVER_MODE_ACTIVATED = 2
 MASTER_PROCESS_ERROR = 3
@@ -36,29 +38,48 @@ UPDATE_PACKAGE_DOWNLOADED = 1
 INSUFFICIENT_MEMORY = 2
 INSUFFICIENT_SPACE = 3
 
+# led blink pattern
+ALWAYS_ON = (0, 0)
+LONG_BLINK = (0.2, 1.2)
+SHORT_BLINK = (0.2, 0.2)
+
 class Monitor:
     def __init__(self, config=None):
         config = config or {}
         [config.setdefault(k, v) for k, v in default_config.items()]
+        
         self.rpc_server = uri = config.get("rpc_server")
         self.client = hprose.HttpClient(uri)
+
+        self.port = port = config.get("port")
+        self.server = server = hprose.HttpServer(port=port)
+        server.addFunctions([
+            self.notice,
+            self.readGPIO,
+            self.listenGPIO,
+            self.cancelListenGPIO,
+            self.writeGPIO
+        ])
+
         self.gpio = {}
         self.led_stop = False
         self.monitor_stop = False
-        print("[  MO-INFO  ] Monitor initialized.")
+
+        print("[  MO-INFO  ] Monitor initialized .")
 
     def start(self):
+        threading.Thread(target=self.server.start, args=()).start()
         try:
             self.init_gpio_monitoring()
             self.start_gpio_monitoring()
-            self.blink_led(interval=1.2)
-            self.start_env_monitoring()
-            self.start_local_rpc_server()
+            self.blink_led(*LONG_BLINK)
+            # self.start_env_monitoring()
+            # self.start_local_rpc_server()
             self.ping()
         except KeyboardInterrupt:
             self.led_stop = True
             self.monitor_stop = True
-            time.sleep(1)
+            time.sleep(0.1)
             print("[  MO-INFO  ] Monitor stopped by user .")
 
     def start_env_monitoring(self):
@@ -68,7 +89,7 @@ class Monitor:
         while not self.monitor_stop:
             print("[  MO-INFO  ] <FAKE> ENV MONITORING ...")
             time.sleep(1)
-        print("[  MO-INFO  ] ENV MONITORING STOPPED ...")
+        print("[  MO-INFO  ] ENV MONITORING STOPPED .")
 
     def start_local_rpc_server(self):
         threading.Thread(target=self._start_local_rpc_server, args=()).start()
@@ -82,7 +103,7 @@ class Monitor:
     def notice(self, code=-1, detail=None):
         if code == MASTER_PROCESS_STARTED:
             print("[  MO-INFO  ] Master process is stared .")
-            self.blink_led(interval=0)
+            self.blink_led(*ALWAYS_ON)
         elif code == UPDATE_READY_FOR_DOWNLOAD:
             print("[  MO-INFO  ] Downloading update package ...")
             self.download()
@@ -141,83 +162,197 @@ class Monitor:
         set_button = self.gpio.get("set")
         led = self.gpio.get("led")
 
-        enable_reset = (gpio.input(reset_button) == gpio.LOW)
-        first_high_reset = False
+        enable_reset = (gpio.input(reset_button) == gpio.HIGH)
+        reset_noted = False
         time_start_reset = 0
         time_kept_reset = 0
 
-        enable_set = (gpio.input(set_button) == gpio.LOW)
-        first_high_set = False
+        enable_set = (gpio.input(set_button) == gpio.HIGH)
+        set_noted = False
         time_start_set = 0
         time_kept_set = 0
         
-        while not self.monitor_stop:  # reset 优先级更高
-            reset_value = gpio.input(reset_button)
-            set_value = gpio.input(set_button)
-            if enable_reset:
-                if reset_value == gpio.HIGH:  # 如果检测到高电平，即为上升沿
-                    while gpio.input(reset_button) == gpio.HIGH:  # 循环等待低电平
-                        time.sleep(0.01)
-                        if not first_high_reset:  # 第一次进入高电平
-                            first_high_reset = True  # 则下次不要进来了
-                            time_start_reset = time.time()  # 记下开始时间
-                        time_kept_reset = time.time() - time_start_reset  # 长按时长
+        while not self.monitor_stop:
+            reset_count = 1
+            set_count = 1
 
-                    if time_kept_reset >= 5:
+            if enable_reset and enable_set:  # 两个键都没按下的时候方可使能，即都为高电平
+                if not gpio.input(reset_button) or not gpio.input(set_button):  # 有一个键按下，则检测到低电平，则为下降沿
+                    reset_value = gpio.input(reset_button)
+                    set_value = gpio.input(set_button)
+                    while not reset_value or not set_value:  # 循环等待两个键都放开，即都为高电平
+                        
+                        reset_value = gpio.input(reset_button)
+                        set_value = gpio.input(set_button)
+
+                        reset_button_is_up = reset_noted and reset_value
+                        set_button_is_up = set_noted and set_value 
+                        
+                        # 对于 reset 键
+                        if not reset_value:
+                            if time_kept_reset > reset_count:  # 提示
+                                print("[  MO-INFO  ] Reset button pressed for: %s" % time_kept_reset)
+                                reset_count += 1
+
+                            if not reset_noted:  # 还未记下开始时间
+                                time_start_reset = time.time()  # 记下开始时间
+                                reset_noted = True  # 不要重复记录开始时间
+                            else:  # 已经记录过开始时间，则计算时长
+                                time_kept_reset = time.time() - time_start_reset
+
+                        # 放开时复位（前提是 set 键没放开）
+                        elif set_value:  
+                            reset_noted = False
+                            time_kept_reset = 0
+                            reset_count = 1
+                        
+                        # 对于 set 键
+                        if not set_value:
+                            if time_kept_set > set_count:  # 提示
+                                print("[  MO-INFO  ] Set button pressed for: %s" % time_kept_set)
+                                set_count += 1
+
+                            if not set_noted:  # 第一次进入低电平
+                                time_start_set = time.time()  # 记下开始时间
+                                set_noted = True  # 不要重复记录开始时间
+                            else:  # 已经记录过开始时间，则计算时长
+                                time_kept_set = time.time() - time_start_set
+
+                        # 放开时复位（前提是 reset 键没放开）
+                        elif reset_value:  
+                            set_button_is_up = True
+                            set_noted = False
+                            time_kept_set = 0
+                            set_count = 1
+
+                    # 两个键都已放开
+                    
+                    # 两个键都被按下为最优先（此时前面的 time_kept 没用）
+                    if time_kept_reset and time_kept_set:
+                        time_start_first_btn = min(time_start_reset, time_kept_set)
+                        time_start_second_btn = max(time_start_reset, time_kept_set)
+
+                        time_kept_first_btn = time.time() - time_start_first_btn
+                        delta_time_start = abs(time_start_first_btn - time_start_second_btn)
+                        
+                        time_kept_two_btns = time_kept_first_btn - delta_time_start
+                        if time_kept_two_btns >= 3:
+                            print("[  MO-INFO  ] Recovery is going to be activated !") 
+                            self.blink_led(*SHORT_BLINK)
+                            self.recover()
+
+                    # 然后是 reset 键
+                    elif time_kept_reset >= 5 and time_kept_reset < 10:
                         print("[  MO-INFO  ] Passwd is going to be reset !")
-                        self.blink_led(interval=1.2)
+                        self.blink_led(*LONG_BLINK)
                         self.reset(USERPASSWD)
                         print("[  MO-INFO  ] Passwd reset !")
                     
                     elif time_kept_reset >= 10:
                         print("[  MO-INFO  ] Userdata is going to be reset !")
-                        self.blink_led(interval=0.1)
+                        self.blink_led(*SHORT_BLINK)
                         self.reset(USERDATA)
                         print("[  MO-INFO  ] Userdata reset !")
 
+                    # 最后是 set 键
+                    elif time_kept_set < 3:
+                        print("[  MO-INFO  ] Restart is going to be activated !")
+                        self.blink_led(*LONG_BLINK)
+                        self.restart()
+                        print("[  MO-INFO  ] Restart activated !")
+                    
+                    elif time_kept_set >= 3:
+                        print("[  MO-INFO  ] Discover mode is going to be activated !")
+                        self.blink_led(*LONG_BLINK)
+                        self.discover()
+                        print("[  MO-INFO  ] Discover mode activated !")
+                    
+                    enable_reset = (gpio.input(reset_button) == gpio.HIGH)
+                    enable_set = (gpio.input(set_button) == gpio.HIGH)
+
+            continue
+            
+            # bkup code
+            
+            if enable_reset:
+                if gpio.input(reset_button) == gpio.LOW:  # 如果检测到低电平，即为下升沿
+                    while gpio.input(reset_button) == gpio.LOW:  # 循环等待高电平
+                        # time.sleep(0.01)
+                        if time_kept_reset > count:
+                            print("[  MO-INFO  ] Reset button pressed for: %s" % time_kept_reset)
+                            count += 1
+                        if not reset_noted:  # 第一次进入低电平
+                            reset_noted = True  # 则下次不要进来了
+                            time_start_reset = time.time()  # 记下开始时间
+                        time_kept_reset = time.time() - time_start_reset  # 长按时长
+
+                    if time_kept_reset >= 5 and time_kept_reset < 10:
+                        print("[  MO-INFO  ] Passwd is going to be reset !")
+                        self.blink_led(*LONG_BLINK)
+                        self.reset(USERPASSWD)
+                        print("[  MO-INFO  ] Passwd reset !")
+                    
+                    elif time_kept_reset >= 10:
+                        print("[  MO-INFO  ] Userdata is going to be reset !")
+                        self.blink_led(*SHORT_BLINK)
+                        self.reset(USERDATA)
+                        print("[  MO-INFO  ] Userdata reset !")
+
+                    reset_noted = False
+                    time_kept_reset = 0
+                    count = 1
+
             elif enable_set:
-                if set_value == gpio.HIGH:  # 如果检测到高电平，即为上升沿
-                    while gpio.input(set_button) == gpio.HIGH:  # 循环等待低电平
-                        time.sleep(0.01)
-                        if not first_high_set:  # 第一次进入高电平
-                            first_high_set = True  # 则下次不要进来了
+                if gpio.input(set_button) == gpio.LOW:  # 如果检测到低电平，即为下升沿
+                    while gpio.input(set_button) == gpio.LOW:  # 循环等待高电平
+                        # time.sleep(0.01)
+                        if time_kept_set > count:
+                            print("[  MO-INFO  ] Set button pressed for: %s" % time_kept_set)
+                            count += 1
+                        if not set_noted:  # 第一次进入低电平
+                            set_noted = True  # 则下次不要进来了
                             time_start_set = time.time()  # 记下开始时间
                         time_kept_set = time.time() - time_start_set  # 长按时长
 
                     if time_kept_set < 3:
                         print("[  MO-INFO  ] Restart is going to be activated !")
-                        self.blink_led(interval=1.2)
+                        self.blink_led(*LONG_BLINK)
                         self.restart()
                         print("[  MO-INFO  ] Restart activated !")
                     
-                    elif time_kept_set > 10:
+                    elif time_kept_set >= 3:
                         print("[  MO-INFO  ] Discover mode is going to be activated !")
-                        self.blink_led(interval=1.2)
+                        self.blink_led(*LONG_BLINK)
                         self.discover()
                         print("[  MO-INFO  ] Discover mode activated !")
 
-            enable_reset = (reset_value == gpio.LOW)
-            enable_set = (set_value == gpio.LOW)
+                    set_noted = False
+                    time_kept_set = 0
+                    count = 1
 
     def dark_led(self):
         self.led_stop = True
         time.sleep(0.1)
+        self.led_stop = False
         gpio.output(self.gpio.get("led"), gpio.LOW)
 
-    def blink_led(self, interval=0):
+    def blink_led(self, interval_dark=0, interval_light=0):
         self.dark_led()
-        
+
         value = gpio.HIGH
         gpio.output(self.gpio.get("led"), value)
         
-        if interval:
-            zerone = cycle((gpio.LOW, gpio.HIGH))
-            threading.Thread(target=self._blink_led, args=()).start()
+        if interval_dark and interval_light:
+            threading.Thread(target=self._blink_led, args=(interval_dark, interval_light)).start()
 
-    def _blink_led(self, interval=0):
+    def _blink_led(self, interval_dark=0, interval_light=0):
         zerone = cycle((gpio.LOW, gpio.HIGH))
+        value = gpio.HIGH
         while not self.led_stop:
-            time.sleep(interval)
+            if value:
+                time.sleep(interval_light)
+            else:
+                time.sleep(interval_dark)
             value = next(zerone)
             gpio.output(self.gpio.get("led"), value)
 
@@ -232,6 +367,9 @@ class Monitor:
     def discover(self):
         print("[  MO-INFO  ] <FAKE> CALLING RPC.DISCOVER FUNCTION .")
         time.sleep(1)
+
+    # def ping(self):
+    #     threading.Thread(target=self._ping, args=()).start()
 
     def ping(self):
         while not self.monitor_stop:
