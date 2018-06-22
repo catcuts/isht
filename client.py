@@ -27,11 +27,15 @@ USERPASSWD = 0
 USERDATA = 1
 
 # notice codes from master process
-MATER_READY_FOR_UPDATE = 0
+MASTER_READY_FOR_UPDATE = 0
+MASTER_RESTARTED = True
+MASTER_RESETTED = True
+
 MASTER_PROCESS_STARTED = 0
 UPDATE_READY_FOR_DOWNLOAD = 1
 DISCOVER_MODE_ACTIVATED = 2
-MASTER_PROCESS_ERROR = 3
+DISCOVER_MODE_DEACTIVATED = 3
+MASTER_PROCESS_ERROR = 4
 
 # nocice codes to master process
 UPDATE_PACKAGE_DOWNLOADED = 1
@@ -43,6 +47,12 @@ ALWAYS_ON = (0, 0)
 LONG_BLINK = (0.2, 1.2)
 SHORT_BLINK = (0.2, 0.2)
 HIGH_FREQ_BLINK = (0.05, 0.05)
+
+NOTIFY_TIMEOUT = 5
+
+class Respond:
+    def __init__(self):
+        self.payload = None
 
 class Monitor:
     def __init__(self, config=None):
@@ -101,7 +111,8 @@ class Monitor:
             print("[  MO-INFO  ] <FAKE> LOCAL RPC SERVER RUNNING ...")
             time.sleep(1)
         print("[  MO-INFO  ] LOCAL RPC SERVER STOPPED .")
-
+    
+    # @LOCAL_RPC
     def notice(self, code=-1, detail=None):
         if code == MASTER_PROCESS_STARTED:
             print("[  MO-INFO  ] Master process is stared .")
@@ -111,20 +122,30 @@ class Monitor:
             self.download()
         elif code == DISCOVER_MODE_ACTIVATED:
             print("[  MO-INFO  ] Discover mode activated .")
+            self.blink_led(*LONG_BLINK)
+            # do some thing that to be determined
+        elif code == DISCOVER_MODE_DEACTIVATED:
+            print("[  MO-INFO  ] Discover mode deactivated .")
+            self.blink_led(*ALWAYS_ON)
             # do some thing that to be determined
         elif code == MASTER_PROCESS_ERROR:
             print("[  MO-INFO  ] Mater process error .")
-            # do some thing that to be determined like show detail errors
-
+            self.blink_led(*SHORT_BLINK)
+            # do some thing that to be determined like showing detail errors
+    
+    # @LOCAL_RPC
     def readGPIO(self, pin):
         return "to be done"
-
+    
+    # @LOCAL_RPC
     def listenGPIO(self, pin, type):
         return "to be done"
-
+    
+    # @LOCAL_RPC
     def cancelListenGPIO(self, pin, type):
         return "to be done"
-
+    
+    # @LOCAL_RPC
     def writeGPIO(pin, value):
         return "to be done"
 
@@ -158,7 +179,8 @@ class Monitor:
 
     def start_gpio_monitoring(self):
         threading.Thread(target=self._start_gpio_monitoring, args=()).start()
-
+    
+    # @GPIO
     def _start_gpio_monitoring(self):
         reset_button = self.gpio.get("reset")
         set_button = self.gpio.get("set")
@@ -246,35 +268,21 @@ class Monitor:
                         time_kept_two_btns = time_kept_first_btn - delta_time_start
                         print("[  MO-DEBUG  ] Reset with Set button pressed for %s secs" % time_kept_two_btns)
                         if time_kept_two_btns >= 3:
-                            print("[  MO-INFO  ] Recovery is going to be activated !") 
-                            self.blink_led(*SHORT_BLINK)
                             self.recover()
 
                     # 然后是 reset 键
                     elif time_kept_reset >= 5 and time_kept_reset < 10:
-                        print("[  MO-INFO  ] Passwd is going to be reset !")
-                        self.blink_led(*LONG_BLINK)
                         self.reset(USERPASSWD)
-                        print("[  MO-INFO  ] Passwd reset !")
                     
                     elif time_kept_reset >= 10:
-                        print("[  MO-INFO  ] Userdata is going to be reset !")
-                        self.blink_led(*SHORT_BLINK)
                         self.reset(USERDATA)
-                        print("[  MO-INFO  ] Userdata reset !")
 
                     # 最后是 set 键
                     elif time_kept_set > 0 and time_kept_set < 3:
-                        print("[  MO-INFO  ] Restart is going to be activated !")
-                        self.blink_led(*LONG_BLINK)
                         self.restart()
-                        print("[  MO-INFO  ] Restart activated !")
                     
                     elif time_kept_set >= 3:
-                        print("[  MO-INFO  ] Discover mode is going to be activated !")
-                        self.blink_led(*LONG_BLINK)
                         self.discover()
-                        print("[  MO-INFO  ] Discover mode activated !")
             
             enable_reset = (gpio.input(reset_button) == gpio.HIGH)
             reset_noted = False
@@ -289,68 +297,8 @@ class Monitor:
             time_kept_set_last = 0
 
             if led_blink_last:  # 恢复 led 上一次的闪烁方式
-                self.blink_led(led_blink_last)
+                self.blink_led(*led_blink_last)
                 led_blink_last = ()
-
-            continue
-            
-            # bkup code
-            
-            if enable_reset:
-                if gpio.input(reset_button) == gpio.LOW:  # 如果检测到低电平，即为下升沿
-                    while gpio.input(reset_button) == gpio.LOW:  # 循环等待高电平
-                        # time.sleep(0.01)
-                        if time_kept_reset > count:
-                            print("[  MO-INFO  ] Reset button pressed for: %s" % time_kept_reset)
-                            count += 1
-                        if not reset_noted:  # 第一次进入低电平
-                            reset_noted = True  # 则下次不要进来了
-                            time_start_reset = time.time()  # 记下开始时间
-                        time_kept_reset = time.time() - time_start_reset  # 长按时长
-
-                    if time_kept_reset >= 5 and time_kept_reset < 10:
-                        print("[  MO-INFO  ] Passwd is going to be reset !")
-                        self.blink_led(*LONG_BLINK)
-                        self.reset(USERPASSWD)
-                        print("[  MO-INFO  ] Passwd reset !")
-                    
-                    elif time_kept_reset >= 10:
-                        print("[  MO-INFO  ] Userdata is going to be reset !")
-                        self.blink_led(*SHORT_BLINK)
-                        self.reset(USERDATA)
-                        print("[  MO-INFO  ] Userdata reset !")
-
-                    reset_noted = False
-                    time_kept_reset = 0
-                    count = 1
-
-            elif enable_set:
-                if gpio.input(set_button) == gpio.LOW:  # 如果检测到低电平，即为下升沿
-                    while gpio.input(set_button) == gpio.LOW:  # 循环等待高电平
-                        # time.sleep(0.01)
-                        if time_kept_set > count:
-                            print("[  MO-INFO  ] Set button pressed for: %s" % time_kept_set)
-                            count += 1
-                        if not set_noted:  # 第一次进入低电平
-                            set_noted = True  # 则下次不要进来了
-                            time_start_set = time.time()  # 记下开始时间
-                        time_kept_set = time.time() - time_start_set  # 长按时长
-
-                    if time_kept_set < 3:
-                        print("[  MO-INFO  ] Restart is going to be activated !")
-                        self.blink_led(*LONG_BLINK)
-                        self.restart()
-                        print("[  MO-INFO  ] Restart activated !")
-                    
-                    elif time_kept_set >= 3:
-                        print("[  MO-INFO  ] Discover mode is going to be activated !")
-                        self.blink_led(*LONG_BLINK)
-                        self.discover()
-                        print("[  MO-INFO  ] Discover mode activated !")
-
-                    set_noted = False
-                    time_kept_set = 0
-                    count = 1
 
     def dark_led(self):
         self.led_stop = True
@@ -360,6 +308,7 @@ class Monitor:
         self.led_current_blink = ()
 
     def blink_led(self, interval_dark=0, interval_light=0):
+        print("[  MO-DEBUG  ] led_current_blink = (%s, %s)" % (interval_dark, interval_light))
         self.dark_led()
 
         value = gpio.HIGH
@@ -381,21 +330,52 @@ class Monitor:
             value = next(zerone)
             gpio.output(self.gpio.get("led"), value)
 
-    def reset(self, type):
+    # @RPC
+    def reset(self, type):  
+        if type == USERPASSWD:
+            self.blink_led(*LONG_BLINK)
+            something = "Passwd"
+        elif type == USERDATA:
+            self.blink_led(*SHORT_BLINK)
+            something = "Userdata"
+        
+        print("[  MO-INFO  ] %s is going to be reset !" % something)
+
         print("[  MO-INFO  ] <FAKE> CALLING RPC.RESET FUNCTION .")
         time.sleep(1)
+        # if calling returns MASTER_RESETTED
+        self.blink_led(*ALWAYS_ON)
+        
+        print("[  MO-INFO  ] %s reset !" % something)
 
+    # @RPC
     def restart(self):
+        print("[  MO-INFO  ] Restart is going to be activated !")
+
+        self.blink_led(*LONG_BLINK)
         print("[  MO-INFO  ] <FAKE> CALLING RPC.RESTART FUNCTION .")
         time.sleep(1)
+        # if calling returns MASTER_RESTARTED
+        self.blink_led(*ALWAYS_ON)
 
+        print("[  MO-INFO  ] Restart activated !")
+
+    # @RPC
     def discover(self):
+        print("[  MO-INFO  ] Discover mode is going to be activated !")
+
         print("[  MO-INFO  ] <FAKE> CALLING RPC.DISCOVER FUNCTION .")
         time.sleep(1)
+        # if calling returns DISCOVER_MODE_ACTIVATED
+        self.blink_led(*LONG_BLINK)
+        # DISCOVER_MODE_DEACTIVATED will be notified by master
+
+        print("[  MO-INFO  ] Discover mode activated !")
 
     # def ping(self):
     #     threading.Thread(target=self._ping, args=()).start()
 
+    # @RPC
     def ping(self):
         while not self.monitor_stop:
             pong = print("[  MO-INFO  ] <FAKE> PING ...")
@@ -403,33 +383,75 @@ class Monitor:
             #     self.kill()
             time.sleep(20)
         pong = print("[  MO-INFO  ] PING STOPPED .")
-
+    
+    # @LOCAL
     def kill(self):
         print("[  MO-INFO  ] <FAKE> KILLING MASTER .")
 
-    def notify(self, code=-1, detail=None):
+    # @RPC
+    def notify(self, code=-1, detail=None, respond=None):
         detail = detail or {}
         print("[  MO-INFO  ] <FAKE> CALLING RPC.NOTICE FUNCTION .")
 
+    # @RPC
     def on_gpio(self, pin, type, value):
         print("[  MO-INFO  ] <FAKE> CALLING RPC.ONGPIO FUNCTION .")
     
+    # @LOCAL
     def download(self, url="", dest=None):
         dest = dest or self.config.get("download_dir")
         print("[  MO-INFO  ] <FAKE> DOWNLOADING FROM %s ..." % url)
         time.sleep(5)
         print("[  MO-INFO  ] <FAKE> DOWNLOADED FROM %s AND TO %s." % (url, dest))
-        self.notify(UPDATE_PACKAGE_DOWNLOADED, detail={})
 
+        def try_notify(number_of_try):
+            if not number_of_try: return 
+            
+            respond = Respond()
+            notify = threading.Thread(target=self.notify, args=(UPDATE_PACKAGE_DOWNLOADED, {}, respond))
+            notify.start()
+            notify.join(timeout=NOTIFY_TIMEOUT)
+
+            if respond.payload == MASTER_READY_FOR_UPDATE:
+                return MASTER_READY_FOR_UPDATE
+            else:
+                return try_notify(number_of_try - 1)
+    
+        if try_notify(3) != MASTER_READY_FOR_UPDATE:
+            print("[  MO-WARNING  ] Not responding from Master process, forciblly kill it .")
+            self.kill()
+        
+        self.update()
+    
+    # @LOCAL
+    def update(self):
+        self.blink_led(*HIGH_FREQ_BLINK)
+        print("[  MO-INFO  ] <FAKE> PRODUCT UPDATING ...")
+        time.sleep(5)
+        print("[  MO-INFO  ] <FAKE> PRODUCT UPDATED .")
+    
+    # @LOCAL
     def recover(self):
+        self.blink_led(*SHORT_BLINK)
+        print("[  MO-INFO  ] Recovery is going to be activated !")
+        time.sleep(5)
         print("[  MO-INFO  ] <FAKE> RECOVERY ACTIVATED .")
 
 if __name__ == '__main__':
+
+    config = copy(default_config)
+
     try:
         uri = sys.argv[1]
     except:
-        uri = "http://127.0.0.1:8181/"
+        uri = "http://127.0.0.1:8282/"
 
-    config = copy(default_config)
+    try:
+        local_rpc_port = sys.argv[2]
+    except:
+        local_rpc_port = 8181
+
     config["rpc_server"] = uri
+    config["port"] = local_rpc_port
+
     Monitor(config).start()

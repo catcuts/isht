@@ -1,8 +1,10 @@
 # -*- coding: utf-8 -*-
 
+import sys
 import time
 import hprose
 import threading
+from copy import copy
 
 default_config = {
     "rpc_server": "http://127.0.0.1:8181/",
@@ -53,6 +55,10 @@ class Simulator:
         self.start_simulating()
         try:
             self.server.start()
+        except ConnectionRefusedError:
+            print("[  SI-WARNING  ] RPC connection refused . Trying ...")
+            time.sleep(1)
+            self.start()
         except KeyboardInterrupt:
             self.simulator_stop = True
             time.sleep(1)
@@ -66,11 +72,13 @@ class Simulator:
         time.sleep(5)
         self.client.notice(MASTER_PROCESS_STARTED, detail={})
         print("[  SI-INFO  ] <SIMULATING> MASTER STARTED .")
-
+    
+    # @RPC
     def ping(self):
         print("[  SI-INFO  ] Simulator received a `ping` .")
         return "pong"
-
+    
+    # @RPC
     def notice(self, code, detail=None):
         detail = detail or {}
         if code == UPDATE_PACKAGE_DOWNLOADED:
@@ -81,15 +89,38 @@ class Simulator:
             print("[  SI-INFO  ] Simulator received a notice: insufficient memory .")
         if code == INSUFFICIENT_SPACE:
             print("[  SI-INFO  ] Simulator received a notice: insufficient space .")
-            
+    
+    # @RPC            
     def restart(self):
         print("[  SI-INFO  ] Simulator restarted .")
-            
+    
+    # @RPC            
     def discover(self):
         print("[  SI-INFO  ] Simulator in discover mode .")
-            
+    
+    # @RPC            
     def reset(self, type=-1):
         print("[  SI-INFO  ] Simulator reset: %s" % RESET_TYPE.get(type, "unknown"))
-
+    
+    # @RPC
     def onGPIO(self, pin, type, value):
         print("[  SI-INFO  ] Simulator GPIO event .")
+
+if __name__ == '__main__':
+
+    config = copy(default_config)
+
+    try:
+        uri = sys.argv[1]
+    except:
+        uri = "http://127.0.0.1:8181/"
+
+    try:
+        local_rpc_port = sys.argv[2]
+    except:
+        local_rpc_port = 8282
+
+    config["rpc_server"] = uri
+    config["port"] = local_rpc_port
+
+    Simulator(config).start()
