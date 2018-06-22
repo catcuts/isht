@@ -42,6 +42,7 @@ INSUFFICIENT_SPACE = 3
 ALWAYS_ON = (0, 0)
 LONG_BLINK = (0.2, 1.2)
 SHORT_BLINK = (0.2, 0.2)
+HIGH_FREQ_BLINK = (0.05, 0.05)
 
 class Monitor:
     def __init__(self, config=None):
@@ -63,6 +64,7 @@ class Monitor:
 
         self.gpio = {}
         self.led_stop = False
+        self.led_current_blink = ()
         self.monitor_stop = False
 
         print("[  MO-INFO  ] Monitor initialized .")
@@ -166,18 +168,23 @@ class Monitor:
         reset_noted = False
         time_start_reset = 0
         time_kept_reset = 0
+        time_kept_reset_last = 0
 
         enable_set = (gpio.input(set_button) == gpio.HIGH)
         set_noted = False
         time_start_set = 0
         time_kept_set = 0
+        time_kept_set_last = 0
         
         while not self.monitor_stop:
             reset_count = 1
             set_count = 1
+            led_blink_last = ()
 
             if enable_reset and enable_set:  # 两个键都没按下的时候方可使能，即都为高电平
                 if not gpio.input(reset_button) or not gpio.input(set_button):  # 有一个键按下，则检测到低电平，则为下降沿
+                    led_blink_last = self.led_current_blink  # 保存当前 led 闪烁方式以备恢复
+                    self.blink_led(*HIGH_FREQ_BLINK)  # 高频闪烁以提示
                     reset_value = gpio.input(reset_button)
                     set_value = gpio.input(set_button)
                     while not reset_value or not set_value:  # 循环等待两个键都放开，即都为高电平
@@ -191,7 +198,7 @@ class Monitor:
                         # 对于 reset 键
                         if not reset_value:
                             if time_kept_reset > reset_count:  # 提示
-                                print("[  MO-INFO  ] Reset button pressed for: %s" % time_kept_reset)
+                                print("[  MO-DEBUG  ] Reset button pressed for: %s" % time_kept_reset)
                                 reset_count += 1
 
                             if not reset_noted:  # 还未记下开始时间
@@ -201,15 +208,16 @@ class Monitor:
                                 time_kept_reset = time.time() - time_start_reset
 
                         # 放开时复位（前提是 set 键没放开）
-                        elif set_value:  
+                        elif set_button_is_up:  
                             reset_noted = False
+                            time_kept_reset_last = time_kept_reset
                             time_kept_reset = 0
                             reset_count = 1
                         
                         # 对于 set 键
                         if not set_value:
                             if time_kept_set > set_count:  # 提示
-                                print("[  MO-INFO  ] Set button pressed for: %s" % time_kept_set)
+                                print("[  MO-DEBUG  ] Set button pressed for: %s" % time_kept_set)
                                 set_count += 1
 
                             if not set_noted:  # 第一次进入低电平
@@ -219,23 +227,24 @@ class Monitor:
                                 time_kept_set = time.time() - time_start_set
 
                         # 放开时复位（前提是 reset 键没放开）
-                        elif reset_value:  
-                            set_button_is_up = True
+                        elif reset_button_is_up:  
                             set_noted = False
+                            time_kept_set_last = time_kept_set
                             time_kept_set = 0
                             set_count = 1
 
                     # 两个键都已放开
                     
                     # 两个键都被按下为最优先（此时前面的 time_kept 没用）
-                    if time_kept_reset and time_kept_set:
-                        time_start_first_btn = min(time_start_reset, time_kept_set)
-                        time_start_second_btn = max(time_start_reset, time_kept_set)
+                    if time_kept_reset_last and time_kept_set_last:
+                        time_start_first_btn = min(time_start_reset, time_kept_set_last)
+                        time_start_second_btn = max(time_start_reset, time_kept_set_last)
 
                         time_kept_first_btn = time.time() - time_start_first_btn
                         delta_time_start = abs(time_start_first_btn - time_start_second_btn)
                         
                         time_kept_two_btns = time_kept_first_btn - delta_time_start
+                        print("[  MO-DEBUG  ] Reset with Set button pressed for %s secs" % time_kept_two_btns)
                         if time_kept_two_btns >= 3:
                             print("[  MO-INFO  ] Recovery is going to be activated !") 
                             self.blink_led(*SHORT_BLINK)
@@ -255,7 +264,7 @@ class Monitor:
                         print("[  MO-INFO  ] Userdata reset !")
 
                     # 最后是 set 键
-                    elif time_kept_set < 3:
+                    elif time_kept_set > 0 and time_kept_set < 3:
                         print("[  MO-INFO  ] Restart is going to be activated !")
                         self.blink_led(*LONG_BLINK)
                         self.restart()
@@ -266,9 +275,22 @@ class Monitor:
                         self.blink_led(*LONG_BLINK)
                         self.discover()
                         print("[  MO-INFO  ] Discover mode activated !")
-                    
-                    enable_reset = (gpio.input(reset_button) == gpio.HIGH)
-                    enable_set = (gpio.input(set_button) == gpio.HIGH)
+            
+            enable_reset = (gpio.input(reset_button) == gpio.HIGH)
+            reset_noted = False
+            time_start_reset = 0
+            time_kept_reset = 0
+            time_kept_reset_last = 0
+
+            enable_set = (gpio.input(set_button) == gpio.HIGH)
+            set_noted = False
+            time_start_set = 0
+            time_kept_set = 0
+            time_kept_set_last = 0
+
+            if led_blink_last:  # 恢复 led 上一次的闪烁方式
+                self.blink_led(led_blink_last)
+                led_blink_last = ()
 
             continue
             
@@ -335,6 +357,7 @@ class Monitor:
         time.sleep(0.1)
         self.led_stop = False
         gpio.output(self.gpio.get("led"), gpio.LOW)
+        self.led_current_blink = ()
 
     def blink_led(self, interval_dark=0, interval_light=0):
         self.dark_led()
@@ -344,6 +367,8 @@ class Monitor:
         
         if interval_dark and interval_light:
             threading.Thread(target=self._blink_led, args=(interval_dark, interval_light)).start()
+
+        self.led_current_blink = (interval_dark, interval_light)
 
     def _blink_led(self, interval_dark=0, interval_light=0):
         zerone = cycle((gpio.LOW, gpio.HIGH))
@@ -374,8 +399,8 @@ class Monitor:
     def ping(self):
         while not self.monitor_stop:
             pong = print("[  MO-INFO  ] <FAKE> PING ...")
-            if not pong:
-                self.kill()
+            # if not pong:
+            #     self.kill()
             time.sleep(20)
         pong = print("[  MO-INFO  ] PING STOPPED .")
 
@@ -395,6 +420,9 @@ class Monitor:
         time.sleep(5)
         print("[  MO-INFO  ] <FAKE> DOWNLOADED FROM %s AND TO %s." % (url, dest))
         self.notify(UPDATE_PACKAGE_DOWNLOADED, detail={})
+
+    def recover(self):
+        print("[  MO-INFO  ] <FAKE> RECOVERY ACTIVATED .")
 
 if __name__ == '__main__':
     try:
