@@ -9,17 +9,21 @@ sys.path.insert(0, root_path)
 import time
 import json
 import hprose
+import requests
 import threading
-from copy import copy
 from utils.update import UpdateManager
+from utils.md5hash import md5_from_file, md5_from_string
 from itertools import cycle
 from pyA20.gpio import gpio
 from pyA20.gpio import port
 from pyA20.gpio import connector
 
 default_config = {
+    # RPC
     "rpc_server": "http://127.0.0.1:8282/",
     "port": 8181,
+    
+    # GPIO
     "gpio_inputs": {
         "set": "PA10",
         "reset": "PA9"
@@ -27,11 +31,22 @@ default_config = {
     "gpio_outputs": {
         "led": "STATUS_LED"
     },
-    "master_dir": "/home/pi/vigateway",
-    "download_dir": "/tmp/download",
-    "backup_dir": "/home/pi/bkup",
-    "update_pkg_name": "vigateway_firmware.zip",
-    "bkup_pkg_name": "vigateway_firmware_bkup_latest.zip",
+    
+    # FILES AND FOLDERS
+    "master_dir": "/home/catcuts/project/isht/test/vigserver_running",
+    "download_dir": "/home/catcuts/project/isht/test/download",
+    "backup_dir": "/home/catcuts/project/isht/test/backup",
+    "update_pkg_name": "vigserver.zip",
+    "bakcup_pkg_name": "vigserver_bkup_latest.zip",
+
+    # MD5 VERIFICATION SPECIFIED FILES
+    "verifying_files": [
+        "core/eventbus/eventbus.js",
+        "core/device/manager.js",
+        "server.js"
+    ],
+
+    # DBUG
     "debug": True
 }
 
@@ -60,8 +75,13 @@ LONG_BLINK = (0.2, 1.2)
 SHORT_BLINK = (0.2, 0.2)
 HIGH_FREQ_BLINK = (0.05, 0.05)
 
-NOTIFY_TIMEOUT = 5
-PING_TIMEOUT = 8
+# notify timeout
+NOTIFY_NUMBER_OF_TRY = 10  # 次
+NOTIFY_TIMEOUT = 5  # 秒
+
+# ping timeout
+PING_MAX_FAIL_TIMES = 8  # 次
+PING_TIMEOUT = 0.5  # 秒
 
 class Respond:
     def __init__(self):
@@ -89,6 +109,7 @@ class Monitor:
         self.led_stop = False
         self.led_current_blink = ()
         self.monitor_stop = False
+        self.ping_enabled = False
 
         self.update_progress = (0, "", 0)
 
@@ -104,7 +125,7 @@ class Monitor:
             self.blink_led(*LONG_BLINK)
             # self.start_env_monitoring()
             self.start_local_rpc_server()
-            self.ping()
+            self.start_ping()
         except KeyboardInterrupt:
             self.led_stop = True
             self.monitor_stop = True
@@ -141,21 +162,22 @@ class Monitor:
     def notice(self, code=-1, detail=None):
         if code == MASTER_PROCESS_STARTED:
             print("[  MO-INFO  ] Master process is stared .")
-            self.blink_led(*ALWAYS_ON)
+            return self.blink_led(*ALWAYS_ON)
         elif code == UPDATE_READY_FOR_DOWNLOAD:
             print("[  MO-INFO  ] Downloading update package ...")
-            self.download(url=detail.get("url"))
+            threading.Thread(target=self.update, args=(detail.get("url"),)).start()
+            return True
         elif code == DISCOVER_MODE_ACTIVATED:
             print("[  MO-INFO  ] Discover mode activated .")
-            self.blink_led(*LONG_BLINK)
+            return self.blink_led(*LONG_BLINK)
             # do some thing that to be determined
         elif code == DISCOVER_MODE_DEACTIVATED:
             print("[  MO-INFO  ] Discover mode deactivated .")
-            self.blink_led(*ALWAYS_ON)
+            return self.blink_led(*ALWAYS_ON)
             # do some thing that to be determined
         elif code == MASTER_PROCESS_ERROR:
             print("[  MO-INFO  ] Mater process error .")
-            self.blink_led(*SHORT_BLINK)
+            return self.blink_led(*SHORT_BLINK)
             # do some thing that to be determined like showing detail errors
     
     # @LOCAL_RPC
@@ -245,7 +267,7 @@ class Monitor:
                         # 对于 reset 键
                         if not reset_value:
                             if time_kept_reset > reset_count:  # 提示
-                                print("[  MO-DEBUG  ] Reset button pressed for: %s" % time_kept_reset)
+                                print("[  MO-DBUG  ] Reset button pressed for: %s" % time_kept_reset)
                                 reset_count += 1
 
                             if not reset_noted:  # 还未记下开始时间
@@ -264,7 +286,7 @@ class Monitor:
                         # 对于 set 键
                         if not set_value:
                             if time_kept_set > set_count:  # 提示
-                                print("[  MO-DEBUG  ] Set button pressed for: %s" % time_kept_set)
+                                print("[  MO-DBUG  ] Set button pressed for: %s" % time_kept_set)
                                 set_count += 1
 
                             if not set_noted:  # 第一次进入低电平
@@ -291,7 +313,7 @@ class Monitor:
                         delta_time_start = abs(time_start_first_btn - time_start_second_btn)
                         
                         time_kept_two_btns = time_kept_first_btn - delta_time_start
-                        print("[  MO-DEBUG  ] Reset with Set button pressed for %s secs" % time_kept_two_btns)
+                        print("[  MO-DBUG  ] Reset with Set button pressed for %s secs" % time_kept_two_btns)
                         if time_kept_two_btns >= 3:
                             self.recover()
 
@@ -333,17 +355,18 @@ class Monitor:
         self.led_current_blink = ()
 
     def blink_led(self, interval_dark=0, interval_light=0):
-        print("[  MO-DEBUG  ] led_current_blink = (%s, %s)" % (interval_dark, interval_light))
+        print("[  MO-DBUG  ] led_current_blink = (%s, %s)" % (interval_dark, interval_light))
         self.dark_led()
 
         value = gpio.HIGH
         gpio.output(self.gpio.get("led"), value)
         
         if interval_dark and interval_light:
-            print("here")
             threading.Thread(target=self._blink_led, args=(interval_dark, interval_light)).start()
 
         self.led_current_blink = (interval_dark, interval_light)
+
+        return True
 
     def _blink_led(self, interval_dark=0, interval_light=0):
         zerone = cycle((gpio.LOW, gpio.HIGH))
@@ -417,16 +440,20 @@ class Monitor:
     #     threading.Thread(target=self._ping, args=()).start()
 
     # @RPC
-    def ping(self):
+    def start_ping(self):
+        self.ping_enabled = True
         master_pid = None
         ping_fail = 0
         killed = False
-        while not self.monitor_stop:
+        while not self.monitor_stop and self.ping_enabled:
             print("[  MO-INFO  ] PING ...")
             if self.debug:
                 pass
             else:
-                pong = self.client.ping()
+                try:
+                    pong = self.try_ping(PING_TIMEOUT)
+                except:
+                    pong = None
                 if pong:
                     master_pid = pong
                     ping_fail = 0
@@ -436,7 +463,7 @@ class Monitor:
                 else:
                     ping_fail += 1
 
-                if ping_fail > PING_TIMEOUT:
+                if ping_fail > PING_MAX_FAIL_TIMES:
                     master_pid = None
                     killed = True
                     self.kill(master_pid)
@@ -449,12 +476,18 @@ class Monitor:
         print("[  MO-INFO  ] PING STOPPED .")
     
     # @LOCAL
+    def stop_ping(self):
+        self.ping_enabled = False
+
+    # @LOCAL
     def kill(self, pid):
         print("[  MO-INFO  ] <FAKE> KILLING MASTER .")
 
     # @LOCAL
-    def revive(self, pid):
-        print("[  MO-INFO  ] <FAKE> KILLING MASTER .")
+    def revive(self):
+        print("[  MO-INFO  ] <FAKE> REVIVED MASTER .")
+        # os.system("sudo python3.6 ./server.py")
+        # os.system("sudo node %s" % os.path.join(self.config.get("master_dir"), "start.js"))
 
     # @RPC
     def notify(self, code=-1, detail=None, respond=None):
@@ -466,7 +499,7 @@ class Monitor:
         else:
             print("[  MO-INFO  ] CALLING RPC.NOTICE FUNCTION .")
             respond_data = self.client.notice(code, detail)
-            if respond: respond["payload"] = respond_data
+            if respond: respond.payload = respond_data
             print("[  MO-INFO  ] CALLED RPC.NOTICE FUNCTION .")
 
     # @RPC (not available yet)
@@ -474,40 +507,60 @@ class Monitor:
         print("[  MO-INFO  ] <FAKE> CALLING RPC.ONGPIO FUNCTION .")
     
     # @LOCAL
-    def download(self, url="", dest=None):
+    def update(self, url="", dest=None):
+
+        self.update_progress = (0, "Preparing ...", 1)  # 开始准备：总进度 0%
+        self.start_update_progress()
+
         dest = dest or self.config.get("download_dir")
         if not os.path.isdir(dest): os.makedirs(dest)
         update_pkg_save_path = os.path.join(dest, self.config.get("update_pkg_name"))
+
+        self.update_progress = (2, "Prepared .", 1)  # 准备完毕：总进度 2%
+
         if self.debug:
             print("[  MO-INFO  ] <FAKE> DOWNLOADING FROM %s ..." % url)
             time.sleep(5)
-            print("[  MO-INFO  ] <FAKE> DOWNLOADED FROM %s AND TO %s." % (url, update_pkg_save_path))
+            print("[  MO-INFO  ] <FAKE> DOWNLOADED FROM %s TO %s." % (url, update_pkg_save_path))
         else:
             print("[  MO-INFO  ] DOWNLOADING FROM %s ..." % url)
+            
             try:
-                self.update_progress = (0, "Downloading ...", 1)  # 开始下载：总进度 0%
-                r = requests.get(url, stream=True)
+                self.update_progress = (5, "Downloading ...", 1)  # 开始下载：总进度 5%
+
+                r = requests.get(url, stream=True, timeout=5)
                 f = open(update_pkg_save_path, "wb")
                 for chunk in r.iter_content(chunk_size=512):
                     if chunk:
                         f.write(chunk)
                 self.update_progress = (10, "Successfully downloaded .", 1)  # 下载完毕：总进度 10%
-                print("[  MO-INFO  ] SUCCESSFULLY DOWNLOADED FROM %s AND TO %s." % (url, dest))
-            except Exception as E:
+                
+                print("[  MO-INFO  ] SUCCESSFULLY DOWNLOADED FROM %s TO %s." % (url, update_pkg_save_path))
+
+                try:
+                    if self.try_notify(NOTIFY_TIMEOUT, NOTIFY_NUMBER_OF_TRY, args=(UPDATE_PACKAGE_DOWNLOADED, {}), success_key=MASTER_READY_FOR_UPDATE, tips="MASTER NOT YET READY FOR UPDATE") != MASTER_READY_FOR_UPDATE:
+                        print("[  MO-WARNING  ] Not responding from Master process, forciblly killing it .")
+                        self.stop_ping()
+                        self.kill()     
+                        print("[  MO-WARNING  ] Not responding from Master process, forciblly killed .")  
+
+                    self._update()
+                    self.start_ping()
+                except Exception as E:
+                    self.update_progress = (self.update_progress[0] - 1, "Error updating : %s" % E, 0)
+                    print("[  MO-INFO  ] PRODUCT FAILED TO UPDATE : %s" % E)
+                    self.blink_led(*SHORT_BLINK)
+                    if self.update_progress[0] >= 70:
+                        self.recover()
+                    else:
+                        print("[  MO-INFO  ] PRODUCT UPDATE PROGRESS < 70% DON\'T NEED RECOVERY .")
+
+            except (Exception, requests.exceptions.Timeout) as E:
                 print("[  MO-INFO  ] FAILED DOWNLOADING FROM %s : %s" % (url, E))
-                self.update_progress = (0, "Error downloading : %s" % E, 0)  # 下载出错：总进度 0%
-            if self.try_notify(10, args=(UPDATE_PACKAGE_DOWNLOADED, {}), success_key=MASTER_READY_FOR_UPDATE, tips="MASTER NOT YET READY FOR UPDATE") != MASTER_READY_FOR_UPDATE:
-                print("[  MO-WARNING  ] Not responding from Master process, forciblly killing it .")
-                self.kill()     
-                print("[  MO-WARNING  ] Not responding from Master process, forciblly killed .")  
-            self.update()
-    
-    # @LOCAL
-    def verify(self, pkg, md5):
-        return True
+                self.update_progress = (self.update_progress[0] - 1, "Error downloading : %s" % E, 0)
 
     # @LOCAL
-    def update(self):
+    def _update(self):
         """
         unpack → cover
         """
@@ -518,27 +571,43 @@ class Monitor:
             print("[  MO-INFO  ] <FAKE> PRODUCT UPDATED .")
         else:
             print("[  MO-INFO  ] PRODUCT UPDATING ...")
-            # "master_dir"     : "/home/pi/vigateway",
-            # "download_dir"   : "/tmp/download",
-            # "backup_dir"     : "/home/pi/bkup",
-            # "update_pkg_name": "vigateway_firmware.zip",
-            # "bkup_pkg_name"  : "vigateway_firmware_bkup_latest.zip",
+            # "master_dir"     : "/path/to/vigateway",
+            # "download_dir"   : "/path/to/download",
+            # "backup_dir"     : "/path/to/bkup",
+            # "update_pkg_name": "vigateway.zip",
+            # "bakcup_pkg_name"  : "vigateway_bkup_latest.zip"
             src = os.path.join(self.config.get("download_dir"), self.config.get("update_pkg_name"))
-            dist = self.config.get("master_dir")
-            try:
-                updateManager = UpdateManager(src, dist) # 实例化
-                self.update_progress = (15, "Unpacking ...", 1)  # 正在解压：总进度 10%
-                updateManager.un_zip() # 解压
-                self.update_progress = (30, "Successfully unpacked .", 1)  # 解压完毕：总进度 30%
-                self.update_progress = (60, "Backupping and Updating ...", 1)  # 正在备份并升级：总进度 60%
-                updateManager.update() # 更新
-                self.update_progress = (100, "Successfully backupped and updated .", 1)  # 备份并升级完毕：总进度 100%
-                print("[  MO-INFO  ] PRODUCT SUCCESSFULLY UPDATED .")
-                self.blink_led(*LONG_BLINK)
-            except Exception as E:
-                self.update_progress = (self.update_progress[0] - 1, "Error updating : %s" % E, 0)
-                print("[  MO-INFO  ] PRODUCT FAILED TO UPDATE .")
-                self.blink_led(*SHORT_BLINK)
+            dest = self.config.get("master_dir")
+            bkup = self.config.get("backup_dir")
+            unzipped = src + "_unzipped"
+            errors = []
+
+            updateManager = UpdateManager(src, dest, bkup) # 实例化
+            
+            self.update_progress = (20, "Unpacking ...", 1)  # 正在解压：总进度 20%
+            errors.extend(updateManager.un_zip()) # 解压
+            if errors: raise Exception("\n\t".join(errors))
+            self.update_progress = (30, "Successfully unpacked .", 1)  # 解压完毕：总进度 30%
+
+            self.update_progress = (40, "Reading version information ...", 1)  # 正在读取版本信息：总进度 40%
+            # 读取
+            original_version_info = json.load(open(os.path.join(dest, "version.json")))
+            version_info = json.load(open(os.path.join(unzipped, "version.json")))  
+            self.update_progress = (50, "Reading version information ...", 1)  # 读取版本信息成功：总进度 50%
+
+            print("[  MO-INFO  ] Updating plan: from *%s* to *%s* ." % (original_version_info.get("version"), version_info.get("version")))
+
+            self.update_progress = (60, "Verifying ...", 1)  # 正在校验：总进度 60%
+            self.verify(unzipped_pkg=unzipped, version_info=version_info)
+            self.update_progress = (70, "Successfully Verified ...", 1)  # 校验成功：总进度 70%
+
+            self.update_progress = (80, "Backupping and Updating ...", 1)  # 正在备份并升级：总进度 80%
+            errors.extend(updateManager.update()) # 更新
+            if errors: raise Exception("\n\t".join(errors))
+            self.update_progress = (100, "Successfully backupped and updated .", version_info.get("version"))  # 备份并升级完毕：总进度 100%
+            
+            print("[  MO-INFO  ] PRODUCT SUCCESSFULLY UPDATED .")
+            self.blink_led(*LONG_BLINK)
 
     # @LOCAL
     def recover(self):
@@ -552,17 +621,36 @@ class Monitor:
             print("[  MO-INFO  ] <FAKE> RECOVERY ACTIVATED .")
         else:
             print("[  MO-INFO  ] PRODUCT RECOVERING ...")
-            src = self.config.get("master_bkup_zip")
+            # "master_dir"     : "/path/to/vigateway",
+            # "download_dir"   : "/path/to/download",
+            # "backup_dir"     : "/path/to/bkup",
+            # "update_pkg_name": "vigateway.zip",
+            # "bakcup_pkg_name"  : "vigateway_bkup_latest.zip"
+            src = os.path.join(self.config.get("backup_dir"), self.config.get("bakcup_pkg_name"))
             dist = self.config.get("master_dir")
+            errors = []
+
             try:
                 updateManager = UpdateManager(src, dist) # 实例化
-                updateManager.un_zip() # 解压
-                updateManager.update() # 更新
+                errors.extend(updateManager.un_zip()) # 解压
+                errors.extend(updateManager.update()) # 更新
                 print("[  MO-INFO  ] PRODUCT RECOVERED .")
                 self.blink_led(*LONG_BLINK)
-            except:
-                print("[  MO-INFO  ] PRODUCT FAILED RECOVERED .")
+                self.revive()
+            except Exception as E:
+                errors = [E]
+            
+            if errors:
+                print("[  MO-INFO  ] PRODUCT FAILED RECOVERED : %s" % "\n\t".join(errors))
                 self.blink_led(*SHORT_BLINK)
+
+    # @LOCAL
+    def verify(self, unzipped_pkg, version_info):
+        files_md5_comb = "".join(list(map(lambda x: md5_from_file(os.path.join(unzipped_pkg, x)), self.config.get("verifying_files"))))
+        if version_info.get("md5") == md5_from_string(files_md5_comb):
+            return True
+        else:
+            raise Exception("MD5 not matched")
 
     # @LOCAL
     def start_update_progress(self):
@@ -570,17 +658,22 @@ class Monitor:
 
     # @LOCAL
     def _update_progress(self, interval=1):
+        print("[  MO-INFO  ] Progress on . @%s" % (self.update_progress,))
         interval = max(0.5, interval)
-        while (self.update_progress[0] != 100) and (self.update_progress[2] != 0):  # 无异常，且未到 100%，则持续进度
-            self.client.process(*self.update_progress)
-            time.sleep(interval)
+        while (self.update_progress[0] != 100):  # 未到 100%，则持续进度
+            self.client.progress(*self.update_progress)
+            if self.update_progress[2] != 0:  # 无异常
+                time.sleep(interval)  # 则继续
+            else:
+                break
+        print("[  MO-INFO  ] Progress off . @%s" % (self.update_progress,))
 
     # @LOCAL
-    def try_notify(self, number_of_try=0, interval=1, args=(), success_key="", tips="..."):
+    def try_notify(self, timeout=0, number_of_try=0, interval=1, args=(), success_key="", tips="..."):
         respond = Respond()
         notify = threading.Thread(target=self.notify, args=(*args, respond))
         notify.start()
-        notify.join(timeout=NOTIFY_TIMEOUT)
+        notify.join(timeout=timeout)
 
         if respond.payload == success_key:
             return success_key
@@ -590,17 +683,29 @@ class Monitor:
             
         if interval > 0: time.sleep(interval)
         if number_of_try <= 0:
-            return self.try_notify(0, interval, args, success_key, tips)
+            return self.try_notify(timeout, 0, interval, args, success_key, tips)
         else:
-            return self.try_notify(number_of_try - 1, interval, args, success_key, tips)
+            return self.try_notify(timeout, number_of_try - 1, interval, args, success_key, tips)
 
     # @LOCAL
-    def try_ping(self):
-        pass
+    def try_ping(self, timeout):
+        respond = Respond()
+        notify = threading.Thread(target=self._ping, args=(respond,))
+        notify.start()
+        notify.join(timeout=timeout)
+        
+        return respond.payload
+
+    # @LOCAL
+    def _ping(self, respond):
+        try:
+            respond.payload = self.client.ping()
+        except:
+            respond.payload = None
 
 if __name__ == '__main__':
 
-    # config = copy(default_config)
+    config = {}
 
     # try:
     #     uri = sys.argv[1]
@@ -612,14 +717,14 @@ if __name__ == '__main__':
     # except:
     #     local_rpc_port = 8181
 
-    # # try:
-    # #     debug = sys.argv[3]
-    # # except:
-    # #     debug = False
-
+    try:
+        debug = sys.argv[1]
+        debug = False if (debug == "false" or debug == "False") else True
+    except:
+        debug = False
 
     # config["rpc_server"] = uri
     # config["port"] = local_rpc_port
-    # # config["debug"] = debug
+    config["debug"] = debug
 
-    Monitor(default_config).start()
+    Monitor(config).start()

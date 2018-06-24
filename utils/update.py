@@ -45,9 +45,9 @@ class UpdateManager:
 
             unZipSuccess = True
 
-        except Exception as error:
-            self.printl("zip file handling error: %s" %error)
-            unZipSuccess = False
+        # except Exception as error:
+        #     self.printl("zip file handling error: %s" %error)
+        #     unZipSuccess = False
             
         except KeyboardInterrupt:
             self.printl("unzip interrupted by someone")

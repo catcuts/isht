@@ -12,6 +12,8 @@ default_config = {
     "port": 8282
 }
 
+UPDATE_PKG_URL = "https://github.com/catcuts/isht/raw/updatepkg/vigserver.zip"
+
 RESET_TYPE = {
     0: "user passwd",
     1: "user data"
@@ -49,7 +51,8 @@ class Simulator:
             self.restart,
             self.discover,
             self.reset,
-            self.onGPIO
+            self.onGPIO,
+            self.progress
         ])
 
         self.simulator_stop = False
@@ -84,7 +87,9 @@ class Simulator:
         time.sleep(2)
         print("[  SI-INFO  ] <SIMULATING> MASTER UPDATE PACKAGE READY FOR DOWNLOAD .")
         
-        if self.try_notify(args=(UPDATE_READY_FOR_DOWNLOAD, {})):
+        if self.try_notify(args=(UPDATE_READY_FOR_DOWNLOAD, {
+            "url": UPDATE_PKG_URL
+        })):
             print("[  SI-INFO  ] SUCCESSFULLY NOTIFIED .")
         else:
             print("[  SI-INFO  ] FAILED TO NOTIFIED .")
@@ -115,9 +120,9 @@ class Simulator:
             time.sleep(2)  # simulating the costing time before getting ready
             return MASTER_READY_FOR_UPDATE
         if code == INSUFFICIENT_MEMORY:
-            print("[  SI-INFO  ] Simulator received a notice: insufficient memory .")
+            return print("[  SI-INFO  ] Simulator received a notice: insufficient memory .")
         if code == INSUFFICIENT_SPACE:
-            print("[  SI-INFO  ] Simulator received a notice: insufficient space .")
+            return print("[  SI-INFO  ] Simulator received a notice: insufficient space .")
     
     # @RPC            
     def restart(self):
@@ -144,12 +149,12 @@ class Simulator:
 
     # @RPC
     def onGPIO(self, pin, type, value):
-        print("[  SI-INFO  ] Simulator GPIO event .")
+        return print("[  SI-INFO  ] Simulator GPIO event .")
 
     # @RPC
     def progress(self, progress, message, code):
         status = "Normal" if code else "Abnormal"
-        print("[  SI-INFO  ] From Assistant: %s %s (status: %s)" % (progress, message, status))
+        return print("[  SI-INFO  ] From Assistant: %s %s (status: %s)" % (progress, message, status))
 
 if __name__ == '__main__':
 
