@@ -1,2 +1,0 @@
-# isht
-as name
