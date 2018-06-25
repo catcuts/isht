@@ -7,19 +7,25 @@ import re
 import hashlib
 import stat
 import time
+import traceback
 
 class UpdateManager:
 
-    def __init__(self,src,dist,bkup=None,log=None):
+    def __init__(self,src,dist,bkup=None,bkup_file_name=None,log=None):
 
-        self.src = src # 升级源文件（ zip 压缩包）
+        self.src = src # 升级源文件（zip 压缩包）
         self.dist = dist # 升级目标目录
         self.bkup = bkup or (dist + "_bkup") # 备份目录
+        self.bkup_file_name = bkup_file_name
         self.log = log or (dist + "_updating-log") # 日志目录
         self.status = "idle"
         self.errors = []
 
-        self.printl("initializing...\n\tsrc: %s\n\tdist: %s\n\tbkup: %s\n\tlog: %s" %(self.src,self.dist,self.bkup,self.log))
+        if bkup and bkup_file_name:
+            _bkup = os.path.join(bkup,bkup_file_name)
+        else:
+            _bkup = "(NOT REQUIRED)"
+        self.printl("initializing...\n\tsrc: %s\n\tdist: %s\n\tbkup: %s\n\tlog: %s" %(self.src,self.dist,_bkup,self.log))
 
     # 解压升级包（ zip 格式）  
     def un_zip(self): # file_name 是包含了 zip 压缩包文件名的文件路径
@@ -28,7 +34,7 @@ class UpdateManager:
         try:
             src = self.src
             zip_file = zipfile.ZipFile(src,"r")  # 创建一个 zipFile 实例（ zip 压缩包对象）
-            
+
             dist = src + "_unzipped"
             # dist = re.sub(r"\.zip$","",src) # 解压目标目录
 
@@ -45,9 +51,9 @@ class UpdateManager:
 
             unZipSuccess = True
 
-        # except Exception as error:
-        #     self.printl("zip file handling error: %s" %error)
-        #     unZipSuccess = False
+        except Exception as error:
+            self.printl("zip file handling error: %s" %error)
+            unZipSuccess = False
             
         except KeyboardInterrupt:
             self.printl("unzip interrupted by someone")
@@ -66,7 +72,15 @@ class UpdateManager:
     def zip(self,rootDir):
         if not os.path.isdir(self.bkup):
             os.mkdir(self.bkup)
-        bkup_file_path = os.path.join(self.bkup,time.strftime('%Y%m%d_%H%M%S',time.localtime(time.time()))) + '.zip'
+        
+        bkup_file_name = self.bkup_file_name
+        if not bkup_file_name: return True
+        if bkup_file_name == "$TIME$":
+            bkup_file_name = time.strftime('%Y%m%d_%H%M%S',time.localtime(time.time()))
+
+        bkup_file_path = os.path.join(self.bkup,bkup_file_name)
+        bkup_file_path = bkup_file_path if bkup_file_path.endswith('.zip') else (bkup_file_path + '.zip')
+        if os.path.isfile(bkup_file_path): os.remove(bkup_file_path)
         try:
             f = zipfile.ZipFile(bkup_file_path,'w',zipfile.ZIP_DEFLATED) 
             for root, dirs, files in os.walk(rootDir): 

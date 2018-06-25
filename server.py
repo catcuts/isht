@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 
+import os
 import sys
 import time
 import json
@@ -57,11 +58,14 @@ class Simulator:
 
         self.simulator_stop = False
 
+        self.pid = None
+
         print("[  SI-INFO  ] Simulator initialized : \n%s" % json.dumps(self.config, indent=4))
 
     def start(self):
         self.start_simulating()
         try:
+            self.pid = os.getpid()
             self.server.start()
         except KeyboardInterrupt:
             self.simulator_stop = True
@@ -110,7 +114,7 @@ class Simulator:
     # @RPC
     def ping(self):
         print("[  SI-INFO  ] Simulator received a `ping` .")
-        return "pong"
+        return self.pid
     
     # @RPC
     def notice(self, code, detail=None):
@@ -154,7 +158,7 @@ class Simulator:
     # @RPC
     def progress(self, progress, message, code):
         status = "Normal" if code else "Abnormal"
-        return print("[  SI-INFO  ] From Assistant: %s %s (status: %s)" % (progress, message, status))
+        return print("[  SI-INFO  ] Progress from Assistant: %s %s (status: %s)" % (progress, message, status))
 
 if __name__ == '__main__':
 
