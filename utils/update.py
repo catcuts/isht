@@ -21,11 +21,11 @@ class UpdateManager:
         self.status = "idle"
         self.errors = []
 
-        if bkup and bkup_file_name:
-            _bkup = os.path.join(bkup,bkup_file_name)
+        if self.bkup and self.bkup_file_name:
+            self._bkup = os.path.join(self.bkup,self.bkup_file_name)
         else:
-            _bkup = "(NOT REQUIRED)"
-        self.printl("initializing...\n\tsrc: %s\n\tdist: %s\n\tbkup: %s\n\tlog: %s" %(self.src,self.dist,_bkup,self.log))
+            self._bkup = "(NOT REQUIRED)"
+        self.printl("initializing...\n\tsrc: %s\n\tdist: %s\n\tbkup: %s\n\tlog: %s" %(self.src,self.dist,self._bkup,self.log))
 
     # 解压升级包（ zip 格式）  
     def un_zip(self): # file_name 是包含了 zip 压缩包文件名的文件路径
@@ -159,7 +159,7 @@ class UpdateManager:
         self.printl("\nrelated info: ")
         self.printl("\tsrc: %s" %self.src)
         self.printl("\tdist: %s" %self.dist)
-        self.printl("\tbkup: %s" %self.bkup)
+        self.printl("\tbkup: %s" %self._bkup)
         self.printl("\tlog: %s" %self.log)
         self.printl("\terrors: %s" %self.errors)
 

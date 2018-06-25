@@ -92,7 +92,8 @@ PING_TIMEOUT = 0.5  # 秒
 # download timeout
 DOWNLOAD_TIMEOUT = 20
 
-KILL_WAITING_TIME = 5
+# kill waiting time
+KILLING_WAITING_TIME = 5
 
 class Respond:
     def __init__(self):
@@ -266,6 +267,10 @@ class Monitor:
             reset_count = 1
             set_count = 1
             led_blink_last = ()
+
+            if self.update_progress[0] != 0:
+                print("[  MO-INFO  ] UPDATING, ALL BUTTONS DISABLED .")
+                continue
 
             if enable_reset and enable_set:  # 两个键都没按下的时候方可使能，即都为高电平
                 if not gpio.input(reset_button) or not gpio.input(set_button):  # 有一个键按下，则检测到低电平，则为下降沿
@@ -471,8 +476,7 @@ class Monitor:
         self.ping_enabled = True
         ping_fail = 0
         killed = False
-
-        self.revive()  # 启动主进程，后再 ping
+        first_ping = True
         
         while not self.monitor_stop and self.ping_enabled:
             print("[  MO-INFO  ] PING ...")
@@ -490,6 +494,9 @@ class Monitor:
                     if self.led_current_blink != ALWAYS_ON:
                         self.blink_led(*ALWAYS_ON)  # 正常工作
                 else:
+                    if first_ping: 
+                        self.revive() 
+                        first_ping = False
                     ping_fail += 1
 
                 if ping_fail > PING_MAX_FAIL_TIMES:
@@ -517,7 +524,7 @@ class Monitor:
                 print("[  MO-INFO  ] KILLING MASTER ...")
                 pid = int(pid)
                 os.system("sudo kill -9 %s" % pid)
-                time.sleep(KILL_WAITING_TIME)
+                time.sleep(KILLING_WAITING_TIME)
                 print("[  MO-INFO  ] KILLED MASTER .")
             except:
                 print("[  MO-INFO  ] FAILED KILLING MASTER .")
@@ -554,7 +561,7 @@ class Monitor:
     # @LOCAL
     def update(self, url="", dest=None):
 
-        self.update_progress = (0, "Preparing ...", 1)  # 开始准备：总进度 0%
+        self.update_progress = (1, "Preparing ...", 1)  # 开始准备：总进度 0%
         self.start_update_progress()
 
         dest = dest or self.config.get("download_dir")
@@ -701,7 +708,7 @@ class Monitor:
                 self.blink_led(*LONG_BLINK)
                 self.revive()
             except Exception as E:
-                errors.append(E)
+                errors.append("%s" % E)
             
             if errors:
                 print("[  MO-INFO  ] PRODUCT FAILED RECOVERED : %s" % "\n\t".join(errors))
@@ -777,26 +784,54 @@ class Monitor:
 
 if __name__ == '__main__':
 
-    config = {}
-
-    # try:
-    #     uri = sys.argv[1]
-    # except:
-    #     uri = "http://127.0.0.1:8282/"
-
-    # try:
-    #     local_rpc_port = sys.argv[2]
-    # except:
-    #     local_rpc_port = 8181
-
     try:
-        debug = sys.argv[1]
-        debug = False if (debug == "false" or debug == "False") else True
+        config_file = sys.argv[1]
     except:
-        debug = False
+        config_file = None
 
-    # config["rpc_server"] = uri
-    # config["port"] = local_rpc_port
-    config["debug"] = debug
+    if os.path.isfile(config_file):
+        print("[  MO-INFO  ] Configuration file selected: %s" % config_file)
+        try:
+            config = json.load(open(config_file))
+            print("[  MO-INFO  ] Configuration file loaded: %s" % config_file)
+        except Exception as E:
+            print("[  MO-ERROR  ] Configuration file loading error: %s\n\t%s" % (E, config_file))
+    else:
+        print("[  MO-ERROR  ] Configuration file doesn't exist: %s" % config_file)
+        config = {}
+
+    not_specified = "ksjdg;oahg"
+    for k, v in default_config.items():
+        specified = config.get(k, not_specified)
+        if specified == not_specified:
+            config[k] = v
 
     Monitor(config).start()
+
+# example
+# {
+#     "rpc_server": "http://127.0.0.1:8282/",
+#     "port": 8181,
+    
+#     "gpio_inputs": {
+#         "set": "PA10",
+#         "reset": "PA9"
+#     },
+#     "gpio_outputs": {
+#         "led": "STATUS_LED"
+#     },
+    
+#     "master_dir": "/home/catcuts/project/isht/test/vigserver_running",
+#     "download_dir": "/home/catcuts/project/isht/test/download",
+#     "backup_dir": "/home/catcuts/project/isht/test/backup",
+#     "update_pkg_name": "vigserver.zip",
+#     "bakcup_pkg_name": "vigserver_bkup_latest.zip",
+
+#     "verifying_files": [
+#         "server.js",
+#         "core/device/manager.js",
+#         "core/eventbus/eventbus.js"
+#     ],
+
+#     "debug": true
+# }
