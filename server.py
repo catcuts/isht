@@ -8,9 +8,16 @@ import hprose
 import threading
 from copy import copy
 
+# default_config = {
+#     "rpc_server": "http://127.0.0.1:8181/",
+#     "port": 8282,
+#     "logfile": "./simu_server_log"
+# }
+
 default_config = {
-    "rpc_server": "http://127.0.0.1:8181/",
-    "port": 8282
+    "rpc_server": "tcp://127.0.0.1:7000/",
+    "port": 7001,
+    "logfile": "./simu_server_log"
 }
 
 UPDATE_PKG_URL = "https://github.com/catcuts/isht/raw/updatepkg/vigserver.zip"
@@ -57,10 +64,13 @@ class Simulator:
         ])
 
         self.simulator_stop = False
-
         self.pid = None
 
-        print("[  SI-INFO  ] Simulator initialized : \n%s" % json.dumps(self.config, indent=4))
+        self.logfile = config.get("logfile")
+        with open(self.logfile, "w") as f:
+            print("", file=f)
+
+        self.printl("[  SI-INFO  ] Simulator initialized : \n%s" % json.dumps(self.config, indent=4))
 
     def start(self):
         self.start_simulating()
@@ -70,33 +80,33 @@ class Simulator:
         except KeyboardInterrupt:
             self.simulator_stop = True
             time.sleep(1)
-            print("[  SI-INFO  ] Simulator stopped by user .")
+            self.printl("[  SI-INFO  ] Simulator stopped by user .")
         except Exception as E:
-            print("[  MO-ERROR  ] Local rpc server failed to start : %s" % E)
+            self.printl("[  MO-ERROR  ] Local rpc server failed to start : %s" % E)
 
     def start_simulating(self):
         threading.Thread(target=self._start_simulating, args=()).start()
 
     def _start_simulating(self):
-        print("[  SI-INFO  ] <SIMULATING> MASTER STARTING ...")
+        self.printl("[  SI-INFO  ] <SIMULATING> MASTER STARTING ...")
         time.sleep(2)
-        print("[  SI-INFO  ] <SIMULATING> MASTER STARTED .")
+        self.printl("[  SI-INFO  ] <SIMULATING> MASTER STARTED .")
 
         if self.try_notify(args=(MASTER_PROCESS_STARTED, {})):
-            print("[  SI-INFO  ] SUCCESSFULLY NOTIFIED .")
+            self.printl("[  SI-INFO  ] SUCCESSFULLY NOTIFIED .")
         else:
-            print("[  SI-INFO  ] FAILED TO NOTIFIED .")
+            self.printl("[  SI-INFO  ] FAILED TO NOTIFIED .")
 
-        print("[  SI-INFO  ] <SIMULATING> MASTER NEED UPDATING ...")
+        self.printl("[  SI-INFO  ] <SIMULATING> MASTER NEED UPDATING ...")
         time.sleep(2)
-        print("[  SI-INFO  ] <SIMULATING> MASTER UPDATE PACKAGE READY FOR DOWNLOAD .")
+        self.printl("[  SI-INFO  ] <SIMULATING> MASTER UPDATE PACKAGE READY FOR DOWNLOAD .")
         
         if self.try_notify(args=(UPDATE_READY_FOR_DOWNLOAD, {
             "url": UPDATE_PKG_URL
         })):
-            print("[  SI-INFO  ] SUCCESSFULLY NOTIFIED .")
+            self.printl("[  SI-INFO  ] SUCCESSFULLY NOTIFIED .")
         else:
-            print("[  SI-INFO  ] FAILED TO NOTIFIED .")
+            self.printl("[  SI-INFO  ] FAILED TO NOTIFIED .")
 
     def try_notify(self, number_of_try=0, interval=1, args=()):
         try:
@@ -104,7 +114,7 @@ class Simulator:
             return True
         except ConnectionRefusedError:
             remain_times = ("REMIANED %s" % number_of_try) if number_of_try else ""
-            print("[  SI-INFO  ] <SIMULATING> CONNECTION REFUSED . TRYING ... %s" % remain_times)
+            self.printl("[  SI-INFO  ] <SIMULATING> CONNECTION REFUSED . TRYING ... %s" % remain_times)
             if interval > 0: time.sleep(interval)
             if number_of_try <= 0:
                 return self.try_notify(0, interval, args)
@@ -113,33 +123,33 @@ class Simulator:
     
     # @RPC
     def ping(self):
-        print("[  SI-INFO  ] Simulator received a `ping` .")
+        self.printl("[  SI-INFO  ] Simulator received a `ping` .")
         return self.pid
     
     # @RPC
     def notice(self, code, detail=None):
         detail = detail or {}
         if code == UPDATE_PACKAGE_DOWNLOADED:
-            print("[  SI-INFO  ] Simulator received a notice: update package downloaded .")
+            self.printl("[  SI-INFO  ] Simulator received a notice: update package downloaded .")
             time.sleep(2)  # simulating the costing time before getting ready
             return MASTER_READY_FOR_UPDATE
         if code == INSUFFICIENT_MEMORY:
-            return print("[  SI-INFO  ] Simulator received a notice: insufficient memory .")
+            return self.printl("[  SI-INFO  ] Simulator received a notice: insufficient memory .")
         if code == INSUFFICIENT_SPACE:
-            return print("[  SI-INFO  ] Simulator received a notice: insufficient space .")
+            return self.printl("[  SI-INFO  ] Simulator received a notice: insufficient space .")
     
     # @RPC            
     def restart(self):
-        print("[  SI-INFO  ] Simulator restarted .")
+        self.printl("[  SI-INFO  ] Simulator restarted .")
         return MASTER_RESTARTED
     
     # @RPC            
     def discover(self):
-        print("[  SI-INFO  ] Simulator in discover mode .")
+        self.printl("[  SI-INFO  ] Simulator in discover mode .")
 
         def disable_discover():
             time.sleep(5)
-            print("[  SI-INFO  ] Simulator quit discover mode .")
+            self.printl("[  SI-INFO  ] Simulator quit discover mode .")
             self.notice(DISCOVER_MODE_DEACTIVATED, detail={})
 
         threading.Thread(target=disable_discover).start()
@@ -148,33 +158,24 @@ class Simulator:
     
     # @RPC            
     def reset(self, type=-1):
-        print("[  SI-INFO  ] Simulator reset: %s" % RESET_TYPE.get(type, "unknown"))
+        self.printl("[  SI-INFO  ] Simulator reset: %s" % RESET_TYPE.get(type, "unknown"))
         return MASTER_RESETTED
 
     # @RPC
     def onGPIO(self, pin, type, value):
-        return print("[  SI-INFO  ] Simulator GPIO event .")
+        return self.printl("[  SI-INFO  ] Simulator GPIO event .")
 
     # @RPC
     def progress(self, progress, message, code):
         status = "Normal" if code else "Abnormal"
-        return print("[  SI-INFO  ] Progress from Assistant: %s %s (status: %s)" % (progress, message, status))
+        return self.printl("[  SI-INFO  ] Progress from Assistant: %s %s (status: %s)" % (progress, message, status))
+
+    # @LOCAL
+    def printl(self, logline, screen=False):    
+        with open(self.logfile, "a") as f:
+            print(logline, file=f)
+            if screen: print(logline)
 
 if __name__ == '__main__':
 
-    config = copy(default_config)
-
-    try:
-        uri = sys.argv[1]
-    except:
-        uri = "http://127.0.0.1:8181/"
-
-    try:
-        local_rpc_port = sys.argv[2]
-    except:
-        local_rpc_port = 8282
-
-    config["rpc_server"] = uri
-    config["port"] = local_rpc_port
-
-    Simulator(config).start()
+    Simulator(default_config).start()

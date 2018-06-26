@@ -267,10 +267,13 @@ class Monitor:
             reset_count = 1
             set_count = 1
             led_blink_last = ()
-
-            if self.update_progress[0] != 0:
-                print("[  MO-INFO  ] UPDATING, ALL BUTTONS DISABLED .")
-                continue
+            
+            meow = 1
+            while self.update_progress[0] != 0:
+                if meow:
+                    print("[  MO-INFO  ] UPDATING, ALL BUTTONS DISABLED .")
+                    meow = 0
+            if meow == 0: print("[  MO-INFO  ] ALL BUTTONS ENABLED .")
 
             if enable_reset and enable_set:  # 两个键都没按下的时候方可使能，即都为高电平
                 if not gpio.input(reset_button) or not gpio.input(set_button):  # 有一个键按下，则检测到低电平，则为下降沿
@@ -745,6 +748,7 @@ class Monitor:
                 break
         
         report_progress()  # 报告最后一条进度
+        self.update_progress = (0, "", 0)
         print("[  MO-INFO  ] Progress off . @%s" % (self.update_progress,))
 
     # @LOCAL

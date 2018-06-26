@@ -1,0 +1,5 @@
+{
+    "rpc_server": "tcp://127.0.0.1:7001/",
+    "port": 7000,
+    "debug": false
+}
