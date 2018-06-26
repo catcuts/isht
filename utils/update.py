@@ -228,6 +228,9 @@ class UpdateManager:
 
     # 打印到日志
     def printl(self,logline):
+        logtime = time.strftime('%Y-%m-%d %H:%M:%S',time.localtime(time.time()))
+        logline = "[%s]%s" % (logtime, logline)
+
         log = self.log
         status = self.status
         logfile = os.path.join(log,"log.txt")

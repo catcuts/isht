@@ -6,7 +6,6 @@ import time
 import json
 import hprose
 import threading
-from copy import copy
 
 # default_config = {
 #     "rpc_server": "http://127.0.0.1:8181/",
@@ -45,7 +44,7 @@ INSUFFICIENT_SPACE = 3
 
 class Simulator:
     def __init__(self, config=None):
-        self.config = config = config or {}
+        self.config = config or {}
         [config.setdefault(k, v) for k, v in default_config.items()]
 
         self.rpc_server = uri = config.get("rpc_server")
