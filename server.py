@@ -170,7 +170,9 @@ class Simulator:
         return self.printl("[  SI-INFO  ] Progress from Assistant: %s %s (status: %s)" % (progress, message, status))
 
     # @LOCAL
-    def printl(self, logline, screen=False):    
+    def printl(self, logline, screen=False):   
+        logtime = time.strftime('%Y-%m-%d %H:%M:%S',time.localtime(time.time()))
+        logline = "[%s]%s" % (logtime, logline) 
         with open(self.logfile, "a") as f:
             print(logline, file=f)
             if screen: print(logline)
