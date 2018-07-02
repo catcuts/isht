@@ -51,7 +51,10 @@ default_config = {
     # "start_cmd": "sudo node /home/catcuts/project/isht/test/vigserver_running/start.js",
 
     # DBUG
-    "debug": True
+    "debug": True,
+
+    # LOG
+    "logfile": "./log"
 }
 
 USERPASSWD = 0
@@ -128,6 +131,11 @@ class Monitor:
         self.update_cancelled = False
 
         self.debug = config.get("debug")
+
+        self.logfile = config.get("logfile")
+        if self.logfile:
+            with open(self.logfile, "w") as f:
+                print("", file=f)
 
         self.log("[  MO-INFO  ] Monitor initialized . Confirgurations: \n%s" % json.dumps(self.config, indent=4))
 
@@ -791,16 +799,20 @@ class Monitor:
             respond.payload = None
 
     # @LOCAL
-    def log(self, log_line):
-        log_time = time.strftime('%Y-%m-%d %H:%M:%S',time.localtime(time.time()))
-        print("[%s]%s" % (log_time, log_line))
+    def log(self, logline, screen=False):
+        logtime = time.strftime('%Y-%m-%d %H:%M:%S',time.localtime(time.time()))
+        logline = "[%s]%s" % (logtime, logline) 
+        if self.logfile:
+            with open(self.logfile, "a") as f:
+                print(logline, file=f)
+        if screen or not self.logfile: print(logline)
 
 if __name__ == '__main__':
 
     try:
         config_file = sys.argv[1]
     except:
-        config_file = None
+        config_file = ""
 
     if os.path.isfile(config_file):
         print("[  MO-INFO  ] Configuration file selected: %s" % config_file)
