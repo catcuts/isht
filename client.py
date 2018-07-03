@@ -46,15 +46,19 @@ default_config = {
         "core/eventbus/eventbus.js"
     ],
 
-    # START COMMAND
+    # COMMAND
     # "start_cmd": "sudo python3.6 ./server.py",
-    # "start_cmd": "sudo node /home/catcuts/project/isht/test/vigserver_running/start.js",
+    # "start_cmd": "sudo node /home/catcuts/project/isht/test/vigserver_running/server/start.js",
+    "kill_cmd": "ps aux | grep /home/catcuts/project/isht/test/vigserver_running/server/start.js | awk '{print $2}' | xargs kill -9",
 
     # DBUG
     "debug": True,
 
     # LOG
-    "logfile": "./log"
+    "logfile": "./log",
+
+    # PICKLE
+    "picklefile": "./pickle"
 }
 
 USERPASSWD = 0
@@ -98,6 +102,12 @@ DOWNLOAD_TIMEOUT = 20
 # kill waiting time
 KILLING_WAITING_TIME = 5
 
+# request for updating
+UPDATING_ACCEPTED = 0
+UPDATING_REFUSED = 1
+CANCELLING_ACCEPTED = 0
+CANCELLING_REFUSED = 1
+
 class Respond:
     def __init__(self):
         self.payload = None
@@ -127,8 +137,10 @@ class Monitor:
         self.ping_enabled = False
         self.master_pid = None
 
+        self.tid = None
         self.update_progress = (0, "", 0)
-        self.update_cancelled = False
+        self.update_cancelling = False
+        self.enable_report_update_progress = False
 
         self.debug = config.get("debug")
 
@@ -146,6 +158,7 @@ class Monitor:
             self.start_gpio_monitoring()
             self.blink_led(*LONG_BLINK)
             # self.start_env_monitoring()
+            self.check_abnormal_updating()
             self.start_local_rpc_server()
             self.start_ping()
         except KeyboardInterrupt:
@@ -180,15 +193,45 @@ class Monitor:
         #     time.sleep(1)
         # self.log("[  MO-INFO  ]  <FAKE> LOCAL RPC SERVER STOPPED .")
     
+    def check_abnormal_updating(self):
+        self.log("[  MO-INFO  ] Checking abnormal updating ...")
+        try:
+            progress_pickled = json.load(open(self.config.get("picklefile"), "r"))
+        except:
+            progress_pickled = {}
+
+        # 恢复进度
+        # 逻辑：
+        #     辅助进程如果重启，亦视为断电，恢复出来的进度如果不是 100，则必然为异常
+        #     辅助进程如果异常退出，或许来不及将异常位置为 0，故在此处应将其置为 0
+        self.tid = progress_pickled.get("tid")
+        self.update_progress = progress_pickled.get("progress", self.update_progress)
+
+        if 100 > self.update_progress[0] >= 70:
+            self.log("[  MO-WARN  ] Found abnormal updating (%s), recovery is to be performed ." % (self.update_progress,))
+            self.kill()  # 发现升级异常，不论是正在运行与否，一律终止后恢复到升级前
+            self.recover()
+            self.update_progress = (self.update_progress[0], self.update_progress[1], 0)
+        elif 100 != self.update_progress[0] != 0:
+            self.log("[  MO-WARN  ] Found abnormal updating (%s), but recovery is no needed to be performed ." % (self.update_progress,))
+            self.update_progress = (self.update_progress[0], self.update_progress[1], 0)
+        
+        # 恢复进度后，重启进度线程（进度线程永远只会被主进程已启动的通知来终止，否则会一直报告该进度，直到被终止）
+        if self.update_progress[0] != 0: self.start_update_progress()
+
+        self.log("[  MO-INFO  ] Checking abnormal updating finished .")
+
     # @LOCAL_RPC
     def notice(self, code=-1, detail=None):
+        detail = detail or {}
+
         if code == MASTER_PROCESS_STARTED:
             self.log("[  MO-INFO  ] Master process is stared .")
-            return self.blink_led(*ALWAYS_ON)
-        elif code == UPDATE_READY_FOR_DOWNLOAD:
-            self.log("[  MO-INFO  ] Downloading update package ...")
-            threading.Thread(target=self.update, args=(detail.get("url"),)).start()
+            self.blink_led(*ALWAYS_ON)
+            if self.update_progress[0] != 0: self.stop_update_progress()
             return True
+        elif code == UPDATE_READY_FOR_DOWNLOAD:
+            return self.update(detail)
         elif code == DISCOVER_MODE_ACTIVATED:
             self.log("[  MO-INFO  ] Discover mode activated .")
             return self.blink_led(*LONG_BLINK)
@@ -198,13 +241,11 @@ class Monitor:
             return self.blink_led(*ALWAYS_ON)
             # do some thing that to be determined
         elif code == MASTER_PROCESS_ERROR:
-            self.log("[  MO-INFO  ] Mater process error .")
+            self.log("[  MO-INFO  ] Master process error .")
             return self.blink_led(*SHORT_BLINK)
             # do some thing that to be determined like showing detail errors
         elif code == CANCEL_UPDATE:
-            self.log("[  MO-INFO  ] Cancelling update ...")
-            self.update_cancelled = True
-            return True
+            return self.cancelUpdate()
 
     # @LOCAL_RPC
     def readGPIO(self, pin):
@@ -507,6 +548,8 @@ class Monitor:
                     killed = False
                     if self.led_current_blink != ALWAYS_ON:
                         self.blink_led(*ALWAYS_ON)  # 正常工作
+                    # if self.update_progress[0] != 0: 
+                    #     self.stop_update_progress()
                 else:
                     # if first_ping: 
                         # self.revive() 
@@ -531,7 +574,7 @@ class Monitor:
         self.ping_enabled = False
 
     # @LOCAL
-    def kill(self, pid):
+    def kill(self, pid=None):
         if self.debug:
             self.log("[  MO-INFO  ] <FAKE> KILLING MASTER .")
         else:
@@ -542,7 +585,14 @@ class Monitor:
                 time.sleep(KILLING_WAITING_TIME)
                 self.log("[  MO-INFO  ] KILLED MASTER .")
             except:
-                self.log("[  MO-INFO  ] FAILED KILLING MASTER .")
+                self.log("[  MO-INFO  ] NO MASTER PID PROVIDED, TRY KILL CMD ...")
+                try:
+                    kill_cmd = self.config.get("kill_cmd")
+                    os.system(kill_cmd)
+                    time.sleep(KILLING_WAITING_TIME)
+                    self.log("[  MO-INFO  ] KILLED MASTER .")
+                except:
+                    self.log("[  MO-INFO  ] FAILED KILLING MASTER .")
                 
     # @LOCAL
     def revive(self):
@@ -573,8 +623,65 @@ class Monitor:
     def on_gpio(self, pin, type, value):
         self.log("[  MO-INFO  ] <FAKE> CALLING RPC.ONGPIO FUNCTION .")
     
+    # @LOCAL_RPC
+    def isUpdating(self):
+        return self.progress[0] != 0
+
+    # @LOCAL_RPC
+    def isCancellingUpdate(self):
+        return self.update_cancelling
+
+    # @LOCAL_RPC
+    def cancelUpdate(self):
+        # 已有中止事务在进行 → 拒绝
+        if self.update_cancelling:
+            self.log("[  MO-INFO  ] Cancelling is refused since an existed cancelling is ongoing .")
+            return {
+                "status": CANCELLING_REFUSED,
+                "message": "Updating is refused: An Updating is on going ."
+            }
+        
+        # 当前没有中止事务 → 接受
+        self.log("[  MO-INFO  ] Cancelling is accepted .")
+        self.update_cancelling = True
+        return {
+            "status": CANCELLING_ACCEPTED,
+            "message": "Cancelling is accepted ."
+        }
+
+    # @LOCAL_RPC
+    def update(self, info=None):
+        info = info or {}
+
+        # 已有升级事务在进行 → 拒绝
+        if self.tid:
+            self.log("[  MO-INFO  ] Updating is refused since an existed updating is ongoing .")
+            return {
+                "status": UPDATING_REFUSED,
+                "message": "Updating is refused: An Updating is on going ."
+            }
+
+        # 当前没有升级事务
+        self.tid = info.get("tid")
+
+        # 没有提供事务 id → 拒绝
+        if not self.tid:  
+            self.log("[  MO-INFO  ] Updating is refused since no tid .")
+            return {
+                "status": UPDATING_REFUSED,
+                "message": "Updating refused: A tid is required ."
+            }
+        
+        # 当前没有升级事务，提供了事务 id → 接受
+        self.log("[  MO-INFO  ] Updating is accepted: Downloading update package ...")
+        threading.Thread(target=self._update, args=(info.get("url"),)).start()
+        return {
+            "status": UPDATING_ACCEPTED,
+            "message": "Updating is accepted: Downloading update package ..."
+        }
+
     # @LOCAL
-    def update(self, url="", dest=None):
+    def _update(self, url="", dest=None):
 
         self.update_progress = (1, "Preparing ...", 1)  # 开始准备：总进度 0%
         self.start_update_progress()
@@ -613,6 +720,14 @@ class Monitor:
                 self.log("[  MO-INFO  ] SUCCESSFULLY DOWNLOADED FROM %s TO %s ." % (url, update_pkg_save_path))
                 # ############################## DOWNLOADED . #############################
 
+                if self.update_cancelling:  # 升级被中止
+                    self.update_progress = (self.update_progress[0] - 1, "Error updating : Cancelled by user .", 0)
+                    self.log("[  MO-INFO  ] PRODUCT FAILED TO UPDATE : CANCELLED BY USER .")
+                    self.blink_led(*LONG_BLINK)
+                    self.update_cancelling = False
+                    self.start_ping()  
+                    return
+
                 try:
                     # ############################ NOTIFYING ... ############################
                     if self.try_notify(NOTIFY_TIMEOUT, NOTIFY_NUMBER_OF_TRY, args=(UPDATE_PACKAGE_DOWNLOADED, {}), success_key=MASTER_READY_FOR_UPDATE, tips="MASTER NOT YET READY FOR UPDATE") != MASTER_READY_FOR_UPDATE:
@@ -620,8 +735,8 @@ class Monitor:
                         self.kill(self.master_pid)     
                         self.log("[  MO-WARNING  ] Not responding from Master process, forciblly killed .")  
                     # ############################## NOTIFIED . #############################
-                    self._update()
-                    self.revive()
+                    self.__update()
+                    # self.revive()
                 except Exception as E:
                     self.update_progress = (self.update_progress[0] - 1, "Error updating : %s" % E, 0)
                     self.log("[  MO-INFO  ] PRODUCT FAILED TO UPDATE : %s" % E)
@@ -640,10 +755,11 @@ class Monitor:
                 self.update_progress = (self.update_progress[0] - 1, "Error downloading : %s" % E, 0)
             
             # NO MATTER WHAT, START PING
+            self.update_cancelling = False
             self.start_ping()
 
     # @LOCAL
-    def _update(self):
+    def __update(self):
         """
         unpack → cover
         """
@@ -739,7 +855,12 @@ class Monitor:
 
     # @LOCAL
     def start_update_progress(self):
+        self.enable_report_update_progress = True
         threading.Thread(target=self._update_progress, args=()).start()
+
+    # @LOCAL
+    def stop_update_progress(self):
+        self.enable_report_update_progress = False
 
     # @LOCAL
     def _update_progress(self, interval=1):
@@ -748,19 +869,21 @@ class Monitor:
         
         def report_progress():
             try:
-                self.client.progress(*self.update_progress)
+                self.client.progress(self.tid, *self.update_progress)
             except:
                 pass
 
-        while (self.update_progress[0] != 100):  # 未到 100%，则持续进度
+        last_progress = self.update_progress
+        while self.enable_report_update_progress:
             report_progress()
-            if self.update_progress[2] != 0:  # 无异常
-                time.sleep(interval)  # 则继续
-            else:
-                break
+            if last_progress != self.update_progress:
+                json.dump({"tid": self.tid, "progress": self.update_progress}, open(self.config.get("picklefile"), "w"))  # 若不存在则自动创建
+            time.sleep(interval)
         
-        report_progress()  # 报告最后一条进度
-        self.update_progress = (0, "", 0)
+        report_progress()  # 报告 最后一条进度
+        self.update_progress = (0, "", 0)  # 重置 进度
+        self.tid = None  # 重置 事务 id
+        json.dump({"tid": self.tid, "progress": self.update_progress}, open(self.config.get("picklefile"), "w"))  # 重置 进度持久化
         self.log("[  MO-INFO  ] Progress off . @%s" % (self.update_progress,))
 
     # @LOCAL

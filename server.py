@@ -65,6 +65,8 @@ class Simulator:
         self.simulator_stop = False
         self.pid = None
 
+        self._simu_restarted_performed = False
+
         self.logfile = config.get("logfile")
         with open(self.logfile, "w") as f:
             print("", file=f)
@@ -101,7 +103,8 @@ class Simulator:
         self.printl("[  SI-INFO  ] <SIMULATING> MASTER UPDATE PACKAGE READY FOR DOWNLOAD .")
         
         if self.try_notify(args=(UPDATE_READY_FOR_DOWNLOAD, {
-            "url": UPDATE_PKG_URL
+            "url": UPDATE_PKG_URL,
+            "tid": 100
         })):
             self.printl("[  SI-INFO  ] SUCCESSFULLY NOTIFIED .")
         else:
@@ -165,9 +168,23 @@ class Simulator:
         return self.printl("[  SI-INFO  ] Simulator GPIO event .")
 
     # @RPC
-    def progress(self, progress, message, code):
+    def progress(self, tid, progress, message, code):
         status = "Normal" if code else "Abnormal"
-        return self.printl("[  SI-INFO  ] Progress from Assistant: %s %s (status: %s)" % (progress, message, status))
+        self.printl("[  SI-INFO  ] <%s> Progress from Assistant: %s %s (status: %s)" % (tid, progress, message, status))
+        if (progress == 100) and not self._simu_restarted_performed: 
+            self._simu_restarted_performed = True
+            threading.Thread(target=self._simu_restarted, args=(5,)).start()
+        return
+
+    def _simu_restarted(self, delay=5):
+        self.printl("[  SI-INFO  ] <SIMULATING> MASTER re-STARTING ...")
+        time.sleep(delay)
+        self.printl("[  SI-INFO  ] <SIMULATING> MASTER re-STARTED .")
+        if self.try_notify(args=(MASTER_PROCESS_STARTED, {})):
+            self.printl("[  SI-INFO  ] SUCCESSFULLY NOTIFIED .")
+        else:
+            self.printl("[  SI-INFO  ] FAILED TO NOTIFIED .")
+        self._simu_restarted_performed = False
 
     # @LOCAL
     def printl(self, logline, screen=False):   
