@@ -3,3 +3,5 @@ download/*
 bkup/*
 test*/*
 tmp/*
+/.bin
+/.idea

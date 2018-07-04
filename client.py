@@ -21,6 +21,7 @@ from pyA20.gpio import connector
 default_config = {
     # RPC
     "rpc_server": "http://127.0.0.1:8282/",
+    "host": "127.0.0.1",
     "port": 8181,
     
     # GPIO
@@ -33,9 +34,12 @@ default_config = {
     },
     
     # FILES AND FOLDERS
-    "master_dir": "/home/catcuts/project/isht/test/vigserver_running",
-    "download_dir": "/home/catcuts/project/isht/test/download",
-    "backup_dir": "/home/catcuts/project/isht/test/backup",
+    "master_dir": "/usr/local/hyt/vigserver",
+    "download_dir": "/usr/local/hyt/download",
+    "backup_dir": "/usr/local/hyt/backup",
+    "backup_excludes": [
+        "/usr/local/hyt/vigserver/node_modules"
+    ],
     "update_pkg_name": "vigserver.zip",
     "bakcup_pkg_name": "vigserver_bkup_latest.zip",
 
@@ -49,7 +53,7 @@ default_config = {
     # COMMAND
     # "start_cmd": "sudo python3.6 ./server.py",
     # "start_cmd": "sudo node /home/catcuts/project/isht/test/vigserver_running/server/start.js",
-    "kill_cmd": "ps aux | grep /home/catcuts/project/isht/test/vigserver_running/server/start.js | awk '{print $2}' | xargs kill -9",
+    "kill_cmd": "ps aux | grep /usr/local/hyt/start.js | awk '{print $2}' | xargs kill -9",
 
     # DBUG
     "debug": True,
@@ -65,7 +69,8 @@ USERPASSWD = 0
 USERDATA = 1
 
 # notice codes from master process
-MASTER_READY_FOR_UPDATE = 0
+# MASTER_READY_FOR_UPDATE = 0
+MASTER_READY_FOR_UPDATE = True
 MASTER_RESTARTED = True
 MASTER_RESETTED = True
 
@@ -89,7 +94,7 @@ SHORT_BLINK = (0.2, 0.2)
 HIGH_FREQ_BLINK = (0.05, 0.05)
 
 # notify timeout
-NOTIFY_NUMBER_OF_TRY = 10  # 次
+NOTIFY_NUMBER_OF_TRY = 20  # 次
 NOTIFY_TIMEOUT = 5  # 秒
 
 # ping timeout
@@ -108,6 +113,10 @@ UPDATING_REFUSED = 1
 CANCELLING_ACCEPTED = 0
 CANCELLING_REFUSED = 1
 
+# progress
+PROGRESS_DELAY = 0.6
+REPORT_PROGRESS_INTERVAL = 0.5
+
 class Respond:
     def __init__(self):
         self.payload = None
@@ -120,10 +129,15 @@ class Monitor:
         self.rpc_server = uri = config.get("rpc_server")
         self.client = hprose.HttpClient(uri)
 
+        self.host = host = config.get("host")
         self.port = port = config.get("port")
-        self.server = server = hprose.HttpServer(port=port)
+        self.server = server = hprose.HttpServer(host=host, port=port)
         server.addFunctions([
             self.notice,
+            self.update,
+            self.isUpdating,
+            self.cancelUpdate,
+            self.isCancellingUpdate,
             self.readGPIO,
             self.listenGPIO,
             self.cancelListenGPIO,
@@ -207,7 +221,7 @@ class Monitor:
         self.tid = progress_pickled.get("tid")
         self.update_progress = progress_pickled.get("progress", self.update_progress)
 
-        if 100 > self.update_progress[0] >= 70:
+        if 100 > self.update_progress[0] >= 90:
             self.log("[  MO-WARN  ] Found abnormal updating (%s), recovery is to be performed ." % (self.update_progress,))
             self.kill()  # 发现升级异常，不论是正在运行与否，一律终止后恢复到升级前
             self.recover()
@@ -228,7 +242,6 @@ class Monitor:
         if code == MASTER_PROCESS_STARTED:
             self.log("[  MO-INFO  ] Master process is stared .")
             self.blink_led(*ALWAYS_ON)
-            if self.update_progress[0] != 0: self.stop_update_progress()
             return True
         elif code == UPDATE_READY_FOR_DOWNLOAD:
             return self.update(detail)
@@ -318,7 +331,8 @@ class Monitor:
             led_blink_last = ()
             
             meow = 1
-            while self.update_progress[0] != 0:
+            while (100 != self.update_progress[0] != 0) and (self.update_progress[2] != 0):
+                # 升级 正常（[2]==0） 进行中（100!=[0]!=0）
                 if meow:
                     self.log("[  MO-INFO  ] UPDATING, ALL BUTTONS DISABLED .")
                     meow = 0
@@ -528,7 +542,7 @@ class Monitor:
         self.ping_enabled = True
         ping_fail = 0
         killed = False
-        # first_ping = True
+        first_ping = True
         
         while not self.monitor_stop and self.ping_enabled:
             if ping_fail:
@@ -548,18 +562,19 @@ class Monitor:
                     killed = False
                     if self.led_current_blink != ALWAYS_ON:
                         self.blink_led(*ALWAYS_ON)  # 正常工作
+                    if first_ping:
+                        self.log("[  MO-INFO  ] FIRST PING !") 
+                        if self.update_progress[0] != 0: self.stop_update_progress()
+                        first_ping = False
                     # if self.update_progress[0] != 0: 
                     #     self.stop_update_progress()
                 else:
-                    # if first_ping: 
-                        # self.revive() 
-                        # first_ping = False
                     ping_fail += 1
 
                 if ping_fail > PING_MAX_FAIL_TIMES:
                     self.master_pid = None
                     killed = True
-                    self.kill(self.master_pid)
+                    self.kill()
                     if self.led_current_blink != SHORT_BLINK:
                         self.blink_led(*SHORT_BLINK)  # 产品出错
                         
@@ -625,7 +640,7 @@ class Monitor:
     
     # @LOCAL_RPC
     def isUpdating(self):
-        return self.progress[0] != 0
+        return self.update_progress[0] != 0
 
     # @LOCAL_RPC
     def isCancellingUpdate(self):
@@ -683,7 +698,7 @@ class Monitor:
     # @LOCAL
     def _update(self, url="", dest=None):
 
-        self.update_progress = (1, "Preparing ...", 1)  # 开始准备：总进度 0%
+        self.set_update_progress((1, "Preparing ...", 1))  # 开始准备：总进度 0%
         self.start_update_progress()
 
         dest = dest or self.config.get("download_dir")
@@ -692,7 +707,7 @@ class Monitor:
         if os.path.isfile(update_pkg_save_path): os.remove(update_pkg_save_path)  # 删除已有
         # time.sleep(1)
         self.stop_ping()  # 停止 ping
-        self.update_progress = (2, "Prepared .", 1)  # 准备完毕：总进度 2%
+        self.set_update_progress((2, "Prepared .", 1))  # 准备完毕：总进度 2%
 
         if self.debug:
             self.log("[  MO-INFO  ] <FAKE> DOWNLOADING FROM %s ..." % url)
@@ -704,7 +719,7 @@ class Monitor:
             
             try:
                 # ############################ DOWNLOADING ... ############################
-                self.update_progress = (5, "Downloading ...", 1)  # 开始下载：总进度 5%
+                self.set_update_progress((5, "Downloading ...", 1))  # 开始下载：总进度 5%
 
                 r = requests.get(url, stream=True, timeout=DOWNLOAD_TIMEOUT)
                 f = open(update_pkg_save_path, "wb")
@@ -713,7 +728,7 @@ class Monitor:
                         f.write(chunk)
                 f.close()
 
-                self.update_progress = (10, "Successfully downloaded .", 1)  # 下载完毕：总进度 10%
+                self.set_update_progress((10, "Successfully downloaded .", 1))  # 下载完毕：总进度 10%
                 
                 if not os.path.isfile(update_pkg_save_path): raise Exception("Download seems completed but downloaded is missing .")
 
@@ -721,7 +736,7 @@ class Monitor:
                 # ############################## DOWNLOADED . #############################
 
                 if self.update_cancelling:  # 升级被中止
-                    self.update_progress = (self.update_progress[0] - 1, "Error updating : Cancelled by user .", 0)
+                    self.set_update_progress((self.update_progress[0] - 1, "Error updating : Cancelled by user .", 0))
                     self.log("[  MO-INFO  ] PRODUCT FAILED TO UPDATE : CANCELLED BY USER .")
                     self.blink_led(*LONG_BLINK)
                     self.update_cancelling = False
@@ -732,27 +747,27 @@ class Monitor:
                     # ############################ NOTIFYING ... ############################
                     if self.try_notify(NOTIFY_TIMEOUT, NOTIFY_NUMBER_OF_TRY, args=(UPDATE_PACKAGE_DOWNLOADED, {}), success_key=MASTER_READY_FOR_UPDATE, tips="MASTER NOT YET READY FOR UPDATE") != MASTER_READY_FOR_UPDATE:
                         self.log("[  MO-WARNING  ] Not responding from Master process, forciblly killing it .")
-                        self.kill(self.master_pid)     
+                        self.kill()     
                         self.log("[  MO-WARNING  ] Not responding from Master process, forciblly killed .")  
                     # ############################## NOTIFIED . #############################
                     self.__update()
                     # self.revive()
                 except Exception as E:
-                    self.update_progress = (self.update_progress[0] - 1, "Error updating : %s" % E, 0)
+                    self.set_update_progress((self.update_progress[0] - 1, "Error updating : %s" % E, 0))
                     self.log("[  MO-INFO  ] PRODUCT FAILED TO UPDATE : %s" % E)
                     self.blink_led(*SHORT_BLINK)
-                    if self.update_progress[0] >= 70:
+                    if self.update_progress[0] >= 90:
                         self.recover()
                     else:
-                        self.log("[  MO-INFO  ] PRODUCT UPDATE PROGRESS < 70% DON\'T NEED RECOVERY .")
+                        self.log("[  MO-INFO  ] PRODUCT UPDATE PROGRESS < 90% DON\'T NEED RECOVERY .")
 
             except requests.exceptions.Timeout:
                 self.log("[  MO-INFO  ] FAILED DOWNLOADING FROM %s : %s" % (url, "Timeout"))
-                self.update_progress = (self.update_progress[0] - 1, "Error downloading : %s" % "Timeout", 0)
+                self.set_update_progress((self.update_progress[0] - 1, "Error downloading : %s" % "Timeout", 0))
 
             except Exception as E:
                 self.log("[  MO-INFO  ] FAILED DOWNLOADING FROM %s : %s" % (url, E))
-                self.update_progress = (self.update_progress[0] - 1, "Error downloading : %s" % E, 0)
+                self.set_update_progress((self.update_progress[0] - 1, "Error downloading : %s" % E, 0))
             
             # NO MATTER WHAT, START PING
             self.update_cancelling = False
@@ -778,42 +793,55 @@ class Monitor:
             src = os.path.join(self.config.get("download_dir"), self.config.get("update_pkg_name"))
             dest = self.config.get("master_dir")
             bkup = self.config.get("backup_dir")
+            bkup_excludes = self.config.get("backup_excludes")
             bkup_file_name = self.config.get("bakcup_pkg_name")
             unzipped = src + "_unzipped"
             errors = []
 
-            updateManager = UpdateManager(src, dest, bkup, bkup_file_name) # 实例化
+            updateManager = UpdateManager(src, dest, bkup, bkup_file_name, bkup_excludes) # 实例化
             
-            self.update_progress = (20, "Unpacking ...", 1)  # 正在解压：总进度 20%
+            self.set_update_progress((20, "Unpacking ...", 1))  # 正在解压：总进度 20%
             errors.extend(updateManager.un_zip()) # 解压
             if errors: raise Exception("\n\t".join(errors))
-            self.update_progress = (30, "Successfully unpacked .", 1)  # 解压完毕：总进度 30%
+            self.set_update_progress((30, "Successfully unpacked .", 1))  # 解压完毕：总进度 30%
 
-            self.update_progress = (40, "Reading version information ...", 1)  # 正在读取版本信息：总进度 40%
+            self.set_update_progress((40, "Reading version information ...", 1))  # 正在读取版本信息：总进度 40%
             # 读取
             original_version_info = json.load(open(os.path.join(dest, "version.json")))
             version_info = json.load(open(os.path.join(unzipped, "version.json")))  
-            self.update_progress = (50, "Reading version information ...", 1)  # 读取版本信息成功：总进度 50%
+            self.set_update_progress((50, "Reading version information ...", 1))  # 读取版本信息成功：总进度 50%
 
             self.log("[  MO-INFO  ] Updating plan: from *%s* to *%s* ." % (original_version_info.get("version"), version_info.get("version")))
 
-            self.update_progress = (60, "Verifying ...", 1)  # 正在校验：总进度 60%
+            self.set_update_progress((60, "Verifying ...", 1))  # 正在校验：总进度 60%
             self.verify(unzipped_pkg=unzipped, version_info=version_info)
-            self.update_progress = (70, "Successfully Verified ...", 1)  # 校验成功：总进度 70%
+            self.set_update_progress((70, "Successfully Verified ...", 1))  # 校验成功：总进度 70%
 
-            self.update_progress = (80, "Backupping and Updating ...", 1)  # 正在备份并升级：总进度 80%
-            errors.extend(updateManager.update()) # 更新
+            self.set_update_progress((80, "Backupping ...", 1))  # 正在备份：总进度 80%
+            errors.extend(updateManager.step_bkup()) # 备份
+
+            self.set_update_progress((90, "Updating ...", 1))  # 正在升级：总进度 90%
+            errors.extend(updateManager.step_update()) # 升级
+
             if errors: raise Exception("\n\t".join(errors))
-            self.update_progress = (100, "Successfully backupped and updated .", version_info.get("version"))  # 备份并升级完毕：总进度 100%
+            self.set_update_progress((100, "Successfully backupped and updated .", version_info.get("version")))  # 备份并升级完毕：总进度 100%
             
             self.log("[  MO-INFO  ] PRODUCT SUCCESSFULLY UPDATED .")
             self.blink_led(*LONG_BLINK)
+
+    # @LOCAL
+    def set_update_progress(self, progress, delay=PROGRESS_DELAY):
+        time.sleep(delay)
+        self.update_progress = progress
 
     # @LOCAL
     def recover(self):
         """
         unpack → cover
         """
+
+        self.stop_ping()
+
         self.blink_led(*SHORT_BLINK)
         if self.debug:
             self.log("[  MO-INFO  ] Recovery is going to be activated !")
@@ -845,6 +873,8 @@ class Monitor:
                 self.log("[  MO-INFO  ] PRODUCT FAILED RECOVERED : %s" % "\n\t".join(errors))
                 self.blink_led(*SHORT_BLINK)
 
+            self.start_ping()
+
     # @LOCAL
     def verify(self, unzipped_pkg, version_info):
         files_md5_comb = "".join(list(map(lambda x: md5_from_file(os.path.join(unzipped_pkg, x)), self.config.get("verifying_files"))))
@@ -863,7 +893,7 @@ class Monitor:
         self.enable_report_update_progress = False
 
     # @LOCAL
-    def _update_progress(self, interval=1):
+    def _update_progress(self, interval=REPORT_PROGRESS_INTERVAL):
         self.log("[  MO-INFO  ] Progress on . @%s" % (self.update_progress,))
         interval = max(0.5, interval)
         
@@ -873,11 +903,12 @@ class Monitor:
             except:
                 pass
 
-        last_progress = self.update_progress
+        last_progress = None
         while self.enable_report_update_progress:
-            report_progress()
             if last_progress != self.update_progress:
+                report_progress()
                 json.dump({"tid": self.tid, "progress": self.update_progress}, open(self.config.get("picklefile"), "w"))  # 若不存在则自动创建
+            last_progress = self.update_progress
             time.sleep(interval)
         
         report_progress()  # 报告 最后一条进度
@@ -917,8 +948,11 @@ class Monitor:
     # @LOCAL
     def _ping(self, respond):
         try:
-            respond.payload = self.client.ping()
-        except:
+            a = self.client.ping()
+            print("ping result: %s" % a)
+            respond.payload = a
+        except Exception as E:
+            print("ping error: %s" % E)
             respond.payload = None
 
     # @LOCAL
@@ -935,7 +969,7 @@ if __name__ == '__main__':
     try:
         config_file = sys.argv[1]
     except:
-        config_file = ""
+        config_file = "./mysetting.json"
 
     if os.path.isfile(config_file):
         print("[  MO-INFO  ] Configuration file selected: %s" % config_file)

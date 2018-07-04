@@ -11,12 +11,14 @@ import traceback
 
 class UpdateManager:
 
-    def __init__(self,src,dist,bkup=None,bkup_file_name=None,log=None):
+    def __init__(self,src,dist,bkup=None,bkup_file_name=None,bkup_excludes=None,log=None):
 
         self.src = src # 升级源文件（zip 压缩包）
         self.dist = dist # 升级目标目录
         self.bkup = bkup or (dist + "_bkup") # 备份目录
         self.bkup_file_name = bkup_file_name
+        bkup_excludes = bkup_excludes or []
+        self.bkup_excludes = bkup_excludes if isinstance(bkup_excludes, (list, tuple)) else [bkup_excludes]
         self.log = log or (dist + "_updating-log") # 日志目录
         self.status = "idle"
         self.errors = []
@@ -25,7 +27,7 @@ class UpdateManager:
             self._bkup = os.path.join(self.bkup,self.bkup_file_name)
         else:
             self._bkup = "(NOT REQUIRED)"
-        self.printl("initializing...\n\tsrc: %s\n\tdist: %s\n\tbkup: %s\n\tlog: %s" %(self.src,self.dist,self._bkup,self.log))
+        self.printl("initializing...\n\tsrc: %s\n\tdist: %s\n\tbkup: %s\n\tbkup_excludes: %s\n\tlog: %s" %(self.src,self.dist,self._bkup,bkup_excludes,self.log))
 
     # 解压升级包（ zip 格式）  
     def un_zip(self): # file_name 是包含了 zip 压缩包文件名的文件路径
@@ -69,7 +71,9 @@ class UpdateManager:
 
         return self.errors
 
-    def zip(self,rootDir):
+    def zip(self,rootDir,excludes=None):
+        excludes = excludes or []
+
         if not os.path.isdir(self.bkup):
             os.mkdir(self.bkup)
         
@@ -81,15 +85,57 @@ class UpdateManager:
         bkup_file_path = os.path.join(self.bkup,bkup_file_name)
         bkup_file_path = bkup_file_path if bkup_file_path.endswith('.zip') else (bkup_file_path + '.zip')
         if os.path.isfile(bkup_file_path): os.remove(bkup_file_path)
+
         try:
-            f = zipfile.ZipFile(bkup_file_path,'w',zipfile.ZIP_DEFLATED) 
-            for root, dirs, files in os.walk(rootDir): 
-                for fileName in files: 
-                    f.write(os.path.join(root,fileName),os.path.join(root.replace(rootDir,""),fileName)) 
+
+            f = zipfile.ZipFile(bkup_file_path, 'w', zipfile.ZIP_DEFLATED)
+
+            def meow(root, dirs, files, excludes, zipfile, index=1):
+                excludes = excludes or []
+
+                for fileName in files:
+                    filePath = os.path.join(root, fileName)
+                    # print("\tfilePath: %s" % filePath)
+                    if len(list(filter(lambda x: filePath.startswith(x), excludes))) == 0:
+                        zipfile.write(filePath, os.path.join(root.replace(rootDir, ""), fileName))
+                        self.printl("%d\t[bkupped]%s" % (index, filePath))
+                    else:
+                        self.printl("%d\t[skipped]%s" % (index, filePath))
+                    index += 1
+
+                for dirName in dirs:
+                    dirPath = os.path.join(root,dirName)
+                    # print("\tdirPath: %s" % dirPath)
+                    if len(list(filter(lambda x: dirPath.startswith(x), excludes))) == 0:
+                        for _root, _dirs, _files in os.walk(dirPath):
+                            meow(_root, _dirs, _files, excludes, zipfile, index)
+                            # self.printl("%d\t[bkupped]%s" % (index + 1, dirPath))
+                            break
+                    else:
+                        self.printl("%d\t[skipped]%s" % (index + 1, dirPath))
+
+            meow(root="", dirs=[rootDir], files=[], excludes=self.bkup_excludes, zipfile=f, index=1)
+
+            # for root, dirs, files in os.walk(rootDir):
+            #     # root 是每一层文件夹
+            #     # dirs 和 files 是该层文件夹下的 文件夹 和 文件 （注意：都只有名称，而非路径）
+            #     # 注：本次 dirs 即下次 root，故无需处理
+            #     for fileName in files:
+            #         filePath = os.path.join(root,fileName)
+            #         fileDirPath = os.path.dirname(filePath)
+            #         # if (filePath in excludes) or (fileDirPath in excludes):
+            #         if len(list(filter(lambda x: filePath.startswith(x), excludes))) == 0:
+            #             # self.printl("bkupping file %s ..." % filePath)
+            #             f.write(filePath,os.path.join(root.replace(rootDir,""),fileName))
+            #             self.printl("%d\t[bkupped]%s @under: %s" % (index + 1, filePath, fileDirPath))
+            #         else:
+            #             self.printl("%d\t[skipped]%s @under: %s" % (index + 1, filePath, fileDirPath))
+            #         index += 1
+
             f.close()
             zipSuccess = True
         except Exception as error:
-            self.printl("zip file handling error: %s" %error)
+            self.printl("zip file handling error: %s" %traceback.format_exc())
             zipSuccess = False
         except KeyboardInterrupt:
             self.printl("unzip interrupted by someone")
@@ -122,14 +168,18 @@ class UpdateManager:
         dist = self.dist
         bkup = self.bkup
 
+        self.step_bkup()
+        self.step_update()
+
+    def step_bkup(self):
         # -------------------------------  backup  -------------------------------
         self.status = "backup"
         self.printl("\nbackup starting...")
-        if self.zip(dist):  # 压缩目标文件(夹)dist
-            self.printl("backup compelete at %s" %bkup)
+        if self.zip(dist,self.bkup_excludes):  # 压缩目标文件(夹)dist
+            self.printl("backup compelete at %s" %self.bkup)
             bkupError = False
         else:
-            self.printl("backup failed at %s" %bkup)
+            self.printl("backup failed at %s" %self.bkup)
             bkupError = True
             self.errors.append("failed to backup")
         # if os.path.isdir(bkup): 
@@ -146,13 +196,14 @@ class UpdateManager:
         #     bkupError = True
         #     self.errors.append("failed to backup")
 
+    def step_update(self, recover_if_error=False):
         # -------------------------------  update  -------------------------------
-        if not bkupError:
+        if not self.errors:
             self.status = "update"
             self.printl("\nupdating...\ntarget: %s" %dist)
             if self.copyFiles(src,dist):
                 self.printl("update compelete.")
-            else:
+            elif recover_if_error:
                 self.printl("update failed.\n\ntarget recovering...")
                 self.recover()
 
@@ -160,6 +211,7 @@ class UpdateManager:
         self.printl("\tsrc: %s" %self.src)
         self.printl("\tdist: %s" %self.dist)
         self.printl("\tbkup: %s" %self._bkup)
+        self.printl("\tbkup_excludes: %s" %self.bkup_excludes)
         self.printl("\tlog: %s" %self.log)
         self.printl("\terrors: %s" %self.errors)
 
@@ -267,8 +319,17 @@ if __name__ == "__main__":
         print("zipfile source or target is unspecified")
         updateEnable = False
 
+    try:
+        bkup = sys.argv[3]
+        try:
+            bkup_excludes = sys.argv[4]
+        except:
+            bkup_excludes = None
+    except:
+        bkup = None
+
     if updateEnable:
-        updateManager = UpdateManager(src,dist) # 实例化
+        updateManager = UpdateManager(src,dist,bkup,"bkup.zip",bkup_excludes) # 实例化
         updateManager.un_zip() # 解压
         updateManager.update() # 更新
         # updateManager.recover() # 还原
