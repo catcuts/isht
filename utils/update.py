@@ -41,10 +41,16 @@ class UpdateManager:
             # dist = re.sub(r"\.zip$","",src) # 解压目标目录
 
             if os.path.isdir(dist): # 判断解压目标目录（ [dist]_files ）是否存在 
-                self.printl("dist already existed: %s" %(dist))  # 存在则无需创建目标目录
-            else:  
-                os.mkdir(dist) # 不存在则创建目标目录  
-                self.printl("new a dist")
+                self.printl("dist already existed: %s , removed ." %(dist))  # 存在则无需创建目标目录
+                shutil.rmtree(dist)  
+            os.mkdir(dist) # 不存在则创建目标目录  
+            self.printl("new a dist")
+
+            # if os.path.isdir(dist): # 判断解压目标目录（ [dist]_files ）是否存在 
+            #     self.printl("dist already existed: %s" %(dist))  # 存在则无需创建目标目录
+            # else:  
+            #     os.mkdir(dist) # 不存在则创建目标目录  
+            #     self.printl("new a dist")
             
             for names in zip_file.namelist():  # 遍历 zip 压缩包中的所有文件
                 zip_file.extract(names,dist + "/")  # 并将它们解压到目标目录（已测试为同步操作）
@@ -175,7 +181,7 @@ class UpdateManager:
         # -------------------------------  backup  -------------------------------
         self.status = "backup"
         self.printl("\nbackup starting...")
-        if self.zip(dist,self.bkup_excludes):  # 压缩目标文件(夹)dist
+        if self.zip(self.dist,self.bkup_excludes):  # 压缩目标文件(夹)dist
             self.printl("backup compelete at %s" %self.bkup)
             bkupError = False
         else:
@@ -195,13 +201,15 @@ class UpdateManager:
         #     self.printl("backup failed.")
         #     bkupError = True
         #     self.errors.append("failed to backup")
+        return self.errors
 
     def step_update(self, recover_if_error=False):
         # -------------------------------  update  -------------------------------
+        src = self.src + "_unzipped"
         if not self.errors:
             self.status = "update"
-            self.printl("\nupdating...\ntarget: %s" %dist)
-            if self.copyFiles(src,dist):
+            self.printl("\nupdating...\ntarget: %s" %self.dist)
+            if self.copyFiles(src,self.dist):
                 self.printl("update compelete.")
             elif recover_if_error:
                 self.printl("update failed.\n\ntarget recovering...")
@@ -331,5 +339,6 @@ if __name__ == "__main__":
     if updateEnable:
         updateManager = UpdateManager(src,dist,bkup,"bkup.zip",bkup_excludes) # 实例化
         updateManager.un_zip() # 解压
-        updateManager.update() # 更新
+        updateManager.step_bkup() # 备份
+        updateManager.step_update() # 更新
         # updateManager.recover() # 还原
