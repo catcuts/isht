@@ -13,6 +13,8 @@ import requests
 import threading
 from utils.update import UpdateManager
 from utils.md5hash import md5_from_file, md5_from_string
+from utils.usbdev import MassStorageUSBListerner
+from utils.shellcmder import ShellCommander
 from itertools import cycle
 from pyA20.gpio import gpio
 from pyA20.gpio import port
@@ -38,6 +40,7 @@ default_config = {
     # FILES AND FOLDERS
     "master_dir": "/usr/local/hyt/vigserver",
     "download_dir": "/usr/local/hyt/download",
+    "mount_dir": "/usr/local/hyt/mount",
     "backup_dir": "/usr/local/hyt/backup",
     "backup_excludes": [
         "/usr/local/hyt/vigserver/node_modules"
@@ -165,6 +168,9 @@ class Monitor:
         self.update_cancelling = False
         self.enable_report_update_progress = False
 
+        # self.device_on_going = None
+        self.mass_storage_usbdev_listerner = MassStorageUSBListerner()
+
         self.debug = config.get("debug")
 
         self.logfile = config.get("logfile")
@@ -189,6 +195,7 @@ class Monitor:
             self.blink_led(*LONG_BLINK)
             # self.start_env_monitoring()
             self.check_abnormal_updating()
+            self.start_usbdev_listerning()
             self.start_local_rpc_server()
             self._start_ping()
         except KeyboardInterrupt:
@@ -240,7 +247,7 @@ class Monitor:
         if 100 > update_progress[0] >= 90-1:
             self.log("[  MO-WARN  ] Found abnormal updating (%s), recovery is to be performed ." % (update_progress,))
             self.kill()  # 发现升级异常，不论是正在运行与否，一律终止后恢复到升级前
-            self.recover()
+            self.recover()  # √
             update_progress = (update_progress[0], update_progress[1], 0)
         elif 100 != update_progress[0] != 0:
             self.log("[  MO-WARN  ] Found abnormal updating (%s), but recovery is no needed to be performed ." % (update_progress,))
@@ -249,6 +256,79 @@ class Monitor:
         if update_progress[0] != 0: self.report_update_progress(update_progress)
 
         self.log("[  MO-INFO  ] Checking abnormal updating finished .")
+
+    def start_usbdev_listerning(self):
+
+        listerner = self.mass_storage_usbdev_listerner
+
+        # def callback_on_plug_out(device):
+            # threading.Thread(target=listerner.start, args=({"on_plug_in": callback_on_plug_in},)).start()
+            # if self.device_on_going == device:
+            #     self.log("[  MO-INFO  ] Device <%s> is the on-going one, plugging out results in restarting listening ." % device)
+            #     self.device_on_going = None
+            #     threading.Thread(target=listerner.start, args=({"on_plug_in": callback_on_plug_in},)).start()
+            # else:
+            #     self.log("[  MO-INFO  ] Device <%s> not the on-going one, plugging out results nothing ." % device)
+
+        def callback_on_plug_in(device):
+
+            # if not self.device_on_going:
+            #     self.device_on_going = device
+            # else:
+            #     self.log("[  MO-INFO  ] device <%s> is on going, <%s> is ignored ." % (self.device_on_going, device))
+            #     return
+
+            listerner.stop()
+
+            try:
+                point = self.config.get("mount_dir")
+                ShellCommander.mount(device, point)
+            except Exception as E:
+                self.log("[  MO-ERROR  ] Error mounting %s on %s: \n\t%s" % (device, point, E))
+                # print(traceback.format_exc())
+
+            update_pkg_path = os.path.join(point, self.config.get("update_pkg_name"))
+            if os.path.isfile(update_pkg_path):
+                self.log("[  MO-INFO  ] Updating from a massive storage device is to be performed .")
+
+                self.update_cancelling = False
+                self.stop_ping()
+
+                try:
+                    self.__update(src=update_pkg_path)
+                    # print("meow !")
+                    time.sleep(5)
+                except Exception as E:
+                    self.report_update_progress((self.update_progress[0] - 1, "Error updating : %s" % E, 0))
+                    self.log("[  MO-INFO  ] PRODUCT FAILED TO UPDATE : %s" % E)
+                    self.blink_led(*SHORT_BLINK)
+                    if self.update_progress[0] >= 90-1:
+                        self.recover()  # √
+                    else:
+                        self.log("[  MO-INFO  ] PRODUCT UPDATE PROGRESS < 90% DON\'T NEED RECOVERY .")
+                    # print("\n%s\n" % traceback.format_exc())
+
+                self.update_cancelling = False
+                threading.Thread(target=self.start_ping).start()  # √
+
+            else:
+                self.log("[  MO-INFO  ] No update package found in the massive storate device, ignored .")
+
+            try:
+                ShellCommander.umount(device, point)
+            except Exception as E:
+                self.log("[  MO-ERROR  ] Error unmounting %s on %s: \n\t%s" % (device, point, E))
+                # print(traceback.format_exc())
+            #
+            threading.Thread(target=listerner.start, args=({"on_plug_in": callback_on_plug_in},)).start()
+
+        threading.Thread(target=listerner.start, args=({"on_plug_in": callback_on_plug_in},)).start()
+
+        # 注意：升级过程中插入新的存储设备，不会对升级过程造成影响，也不会发生额外的升级过程，即被忽略
+        #      只有当前升级过程完成后，拔出该存储设备，并重新拔插升级过程中插入的存储设备，才会基于此存储设备发生升级
+
+    def stop_usbdev_listerning(self):
+        self.mass_storage_usbdev_listerner.stop()
 
     # @LOCAL_RPC
     def notice(self, code=-1, detail=None):
@@ -418,7 +498,15 @@ class Monitor:
                         time_kept_two_btns = time_kept_first_btn - delta_time_start
                         self.log("[  MO-DBUG  ] Reset with Set button pressed for %s secs" % time_kept_two_btns)
                         if time_kept_two_btns >= 3:
+                            self.update_cancelling = False
+                            self.stop_ping()
+                            self.stop_usbdev_listerning()
+                            
                             self.recover()
+
+                            self.update_cancelling = False
+                            threading.Thread(target=self.start_ping).start()  # √
+                            self.start_usbdev_listerning()
 
                     # 然后是 reset 键
                     elif time_kept_reset >= 5 and time_kept_reset < 10:
@@ -693,9 +781,9 @@ class Monitor:
         if self.update_cancelling:  # 升级被中止
             self.report_update_progress((self.update_progress[0] - 1, "Error updating : Cancelled by user .", 0))
             self.log("[  MO-INFO  ] PRODUCT FAILED TO UPDATE : CANCELLED BY USER .")
-            self.blink_led(*LONG_BLINK)
-            self.update_cancelling = False
-            self.start_ping()  
+            # self.blink_led(*LONG_BLINK)
+            # self.update_cancelling = False
+            # self.start_ping()
             return True
         else:
             return False
@@ -725,6 +813,7 @@ class Monitor:
         
         # 当前没有升级事务，提供了事务 id → 接受
         self.stop_ping()  # 停止 ping
+        self.stop_usbdev_listerning()  # 停止 listerning
         self.log("[  MO-INFO  ] Updating is accepted: Downloading update package ...")
         threading.Thread(target=self._update, args=(info.get("url"),)).start()
         return {
@@ -751,7 +840,7 @@ class Monitor:
             self.log("[  MO-INFO  ] <FAKE> DOWNLOADING FROM %s ..." % url)
             time.sleep(5)
             self.log("[  MO-INFO  ] <FAKE> DOWNLOADED FROM %s TO %s." % (url, update_pkg_save_path))
-            self.start_ping()
+            self.start_ping()  # √
         else:
             self.log("[  MO-INFO  ] DOWNLOADING FROM %s ..." % url)
             
@@ -780,7 +869,7 @@ class Monitor:
                     self.log("[  MO-INFO  ] PRODUCT FAILED TO UPDATE : %s" % E)
                     self.blink_led(*SHORT_BLINK)
                     if self.update_progress[0] >= 90-1:
-                        self.recover()
+                        self.recover()  # √
                     else:
                         self.log("[  MO-INFO  ] PRODUCT UPDATE PROGRESS < 90% DON\'T NEED RECOVERY .")
                     # print("\n%s\n" % traceback.format_exc())
@@ -796,11 +885,13 @@ class Monitor:
                 # print("\n%s\n" % traceback.format_exc())
             
             # NO MATTER WHAT, START PING
+            self.blink_led(*LONG_BLINK)
             self.update_cancelling = False
-            self.start_ping()
+            self.start_usbdev_listerning()
+            self.start_ping()  # √
 
     # @LOCAL
-    def __update(self):
+    def __update(self, src=None):
         """
         unpack → cover
         """
@@ -816,7 +907,7 @@ class Monitor:
             # "backup_dir"     : "/path/to/bkup",
             # "update_pkg_name": "vigateway.zip",
             # "bakcup_pkg_name"  : "vigateway_bkup_latest.zip"
-            src = os.path.join(self.config.get("download_dir"), self.config.get("update_pkg_name"))
+            src = src or os.path.join(self.config.get("download_dir"), self.config.get("update_pkg_name"))
             dest = self.config.get("master_dir")
             bkup = self.config.get("backup_dir")
             bkup_excludes = self.config.get("backup_excludes")
@@ -892,7 +983,7 @@ class Monitor:
         unpack → cover
         """
 
-        self.stop_ping()
+        # self.stop_ping()
 
         self.blink_led(*SHORT_BLINK)
         if self.debug:
@@ -925,7 +1016,7 @@ class Monitor:
                 self.log("[  MO-INFO  ] PRODUCT FAILED RECOVERED : %s" % "\n\t".join(errors))
                 self.blink_led(*SHORT_BLINK)
 
-            self.start_ping()
+            # self.start_ping()
 
     # @LOCAL
     def verify(self, unzipped_pkg, version_info):
@@ -1004,10 +1095,10 @@ class Monitor:
     def _ping(self, respond):
         try:
             a = self.client.ping()
-            print("ping result: %s" % a)
+            self.log("[  MO-INFO  ] Ping-Pong result: %s" % a)
             respond.payload = a
         except Exception as E:
-            print("ping error: %s" % E)
+            self.log("[  MO-INFO  ] Ping-Pong error: %s" % E)
             respond.payload = None
 
     # @LOCAL

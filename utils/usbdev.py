@@ -2,6 +2,7 @@
 
 import re
 import time
+import threading
 import subprocess
 
 CMD_LIST_SDX = "ls /dev/sd*"
@@ -28,10 +29,12 @@ class MassStorageUSBListerner:
         self.interval = interval
         self.logfile = logfile
 
-    def start(self):
+    def start(self, callback=None):
+        self.callback = callback or self.callback
         if self.status == "start":
             self.log("[  UL-WARN  ] Starting refused, already listening .")
         else:
+            self.status = "start"
             self.log("[  UL-INFO  ] Listerning started .")
             self.listrening()
 
@@ -42,8 +45,10 @@ class MassStorageUSBListerner:
     def listrening(self):
         try:
             while self.status != "stop":
+                # self.log("meow ...")
                 self.find()
                 if self.interval: time.sleep(self.interval)
+                self.log("meow ...")
         except KeyboardInterrupt:
             pass
         self.log("[  UL-INFO  ] Listerning stopped .")
@@ -53,7 +58,7 @@ class MassStorageUSBListerner:
         
         err = pipe.stderr.read()
         if err:
-            # self.log("[  UL-ERRO  ] Error executing `%s`: %s" % (CMD_LIST_SDX, err))
+            # self.log("[  UL-ERROR  ] Error executing `%s`: %s" % (CMD_LIST_SDX, err))
             devices = []
         else:
             devs = pipe.stdout.read().decode().strip('\n').split('\n')
@@ -64,31 +69,36 @@ class MassStorageUSBListerner:
         if amount == self.amount: return False
 
         if amount < self.amount:
-            self.on_plug_out(self.devices.pop(0))
+            old_devices = list(set(self.devices) - set(devices))
+            [self.devices.pop(self.devices.index(dev)) for dev in old_devices]  # self.devices contains old_devices so no index error will happen
+            self.on_plug_out(old_devices)
         elif amount > self.amount:
-            self.on_plug_in(devices[0])
-            self.devices.insert(0, devices[0])
+            new_devices = list(set(devices) - set(self.devices))
+            [self.devices.append(dev) for dev in new_devices]
+            self.on_plug_in(new_devices)
 
         self.amount = amount
         return True
 
-    def on_plug_in(self, device):
+    def on_plug_in(self, devices):
         self.log("[  UL-INFO  ] Something plugged in .")
         callback = self.callback.get("on_plug_in")
         if callable(callback): 
-            try:
-                callback(device)
-            except Exception as E:
-                self.log("[  UL-ERRO  ] Error while callback on device plug in: %s" % E)
+            for device in devices:
+                try:
+                    threading.Thread(target=callback, args=(device,)).start()
+                except Exception as E:
+                    self.log("[  UL-ERROR  ] Error while callback on <%s> plug in: \n\t%s" % (device, E))
 
-    def on_plug_out(self, device):
+    def on_plug_out(self, devices):
         self.log("[  UL-INFO  ] Something plugged out .")
         callback = self.callback.get("on_plug_out")
         if callable(callback): 
-            try:
-                callback(device)
-            except Exception as E:
-                self.log("[  UL-ERRO  ] Error while callback on device plug out: %s" % E)
+            for device in devices:
+                try:
+                    threading.Thread(target=callback, args=(device,)).start()
+                except Exception as E:
+                    self.log("[  UL-ERROR  ] Error while callback on <%s> plug out: \n\t%s" % (device, E))
 
     def log(self, logline, screen=True):
         logtime = time.strftime('%Y-%m-%d %H:%M:%S',time.localtime(time.time()))
