@@ -45,7 +45,7 @@ default_config = {
     "backup_excludes": [
         "/usr/local/hyt/vigserver/node_modules"
     ],
-    "update_pkg_name": "vigserver.zip",
+    "update_pkg_name": "vigserver_firmware.zip",
     "bakcup_pkg_name": "vigserver_bkup_latest.zip",
 
     # MD5 VERIFICATION SPECIFIED FILES
@@ -57,17 +57,20 @@ default_config = {
 
     # COMMAND
     # "start_cmd": "sudo python3.6 ./server.py",
-    # "start_cmd": "sudo node /home/catcuts/project/isht/test/vigserver_running/server/start.js",
-    "kill_cmd": "ps aux | grep /usr/local/hyt/start.js | awk '{print $2}' | xargs kill -9",
+    "start_cmd": "sudo node --inspect=0.0.0.0 /usr/local/hyt/vigserver/start.js > /dev/null",
+    "kill_cmd": "ps aux | grep /usr/local/hyt/vigserver/start.js | awk '{print $2}' | xargs kill -9",
 
     # DBUG
     "debug": True,
 
     # LOG
-    "logfile": "./log",
+    "logfile": "/usr/local/hyt/vigmonitor/log",
 
     # PICKLE
-    "picklefile": "./pickle"
+    "picklefile": "/usr/local/hyt/vigmonitor/pickle",
+
+    # ENVIRON
+    "environ": "environ"
 }
 
 USERPASSWD = 0
@@ -81,8 +84,8 @@ MASTER_RESETTED = True
 
 MASTER_PROCESS_STARTED = 0
 UPDATE_READY_FOR_DOWNLOAD = 1
-DISCOVER_MODE_ACTIVATED = 2
-DISCOVER_MODE_DEACTIVATED = 3
+DISCOVER_MODE_ACTIVATED = True
+DISCOVER_MODE_DEACTIVATED = False
 MASTER_PROCESS_ERROR = 4
 CANCEL_UPDATE = 5
 
@@ -92,9 +95,9 @@ INSUFFICIENT_MEMORY = 2
 INSUFFICIENT_SPACE = 3
 
 # led blink pattern
-LED_WAITING_TIME = 1.5  # waiting time should longer than all below
+LED_WAITING_TIME = 1  # waiting time should longer than all below
 ALWAYS_ON = (0, 0)
-LONG_BLINK = (0.2, 1.2)
+LONG_BLINK = (0.1, 0.8)
 SHORT_BLINK = (0.2, 0.2)
 HIGH_FREQ_BLINK = (0.05, 0.05)
 
@@ -103,7 +106,8 @@ NOTIFY_NUMBER_OF_TRY = 5  # 次
 NOTIFY_TIMEOUT = 5  # 秒
 
 # ping timeout
-PING_MAX_FAIL_TIMES = 8  # 次
+PING_MAX_FAIL_TIMES = 2  # 次
+PING_INTERVAL = 20  # 秒
 PING_TIMEOUT = 0.5  # 秒
 
 # download timeout
@@ -126,8 +130,8 @@ REPORT_PROGRESS_INTERVAL = 0.5
 # depending on wiring
 # for example, one may wire the led which will be lighened by gpio.LOW
 # while for internal STATUS_LED, this is reversed
-DARK = gpio.LOW
-LIGHT = gpio.HIGH
+DARK = 0
+LIGHT = 1
 
 class Respond:
     def __init__(self):
@@ -135,8 +139,14 @@ class Respond:
 
 class Monitor:
     def __init__(self, config=None):
+
         self.config = config = config or {}
         [config.setdefault(k, v) for k, v in default_config.items()]
+
+        try:
+            globals().update(importlib.import_module(config.get("environ")).__dict__)
+        except:
+            pass
 
         self.rpc_server = uri = config.get("rpc_server")
         self.client = hprose.HttpClient(uri)
@@ -179,6 +189,8 @@ class Monitor:
                 print("", file=f)
 
         atexit.register(self.atexit)
+
+        self.discover_off()
 
         self.log("[  MO-INFO  ] Monitor initialized . Confirgurations: \n%s" % json.dumps(self.config, indent=4))
 
@@ -336,6 +348,7 @@ class Monitor:
 
         if code == MASTER_PROCESS_STARTED:
             self.log("[  MO-INFO  ] Master process is stared .")
+            self.discover_off()  # 启动，说明之前停止，不论之前是否为发现模式，都置其为 False
             self.blink_led(*ALWAYS_ON)
             return True
         elif code == UPDATE_READY_FOR_DOWNLOAD:
@@ -520,7 +533,7 @@ class Monitor:
                         self.restart()
                     
                     elif time_kept_set >= 3:
-                        self.discover()
+                        self.discover_on()
             
             enable_reset = (gpio.input(reset_button) == gpio.HIGH)
             reset_noted = False
@@ -606,14 +619,18 @@ class Monitor:
                 self.log("[  MO-WARN  ] Restart Error: %s" % E)
         # if calling returns MASTER_RESTARTED
         if result == MASTER_RESTARTED:
-            self.blink_led(*ALWAYS_ON)
+            self.blink_led(*LONG_BLINK)
         else:  # 产品出错
             self.blink_led(*SHORT_BLINK)
 
         self.log("[  MO-INFO  ] Restart activated !")
 
     # @RPC
-    def discover(self):
+    def discover_on(self):
+        if self.discover_mode_on:
+            self.log("[  MO-INFO  ] Discover mode is on, re-activating it is not allowed .")
+            return
+            
         self.log("[  MO-INFO  ] Discover mode is going to be activated !")
 
         if self.debug:
@@ -629,15 +646,21 @@ class Monitor:
 
         # if calling returns DISCOVER_MODE_ACTIVATED
         if result == DISCOVER_MODE_ACTIVATED:
+            self.discover_mode_on = True
             self.blink_led(*LONG_BLINK)
             self.log("[  MO-INFO  ] Discover mode activated !")
             # DISCOVER_MODE_DEACTIVATED will be notified by master
         else:
             self.log("[  MO-INFO  ] Discover mode FAILED activated !")
 
+    def discover_off(self):
+        self.discover_mode_on = False
+        self.log("[  MO-INFO  ] Discover mode is off .")
+
     # def ping(self):
     #     threading.Thread(target=self._ping, args=()).start()
 
+    # @LOCAL
     def start_ping(self):
         try:
             self._start_ping()
@@ -645,7 +668,7 @@ class Monitor:
             self.dark_led()
             self.log("[  MO-INFO  ] Monitor stopped by user .")
 
-    # @RPC
+    # @LOCAL
     def _start_ping(self):
         self.log("[  MO-INFO  ] PING STARTED .")
         self.ping_enabled = True
@@ -654,10 +677,7 @@ class Monitor:
         first_ping = True
         
         while not self.monitor_stop and self.ping_enabled:
-            if ping_fail:
-                self.log("[  MO-INFO  ] PING ... FAILED(%s)" % ping_fail)
-            else:
-                self.log("[  MO-INFO  ] PING ...")                
+            self.log("[  MO-INFO  ] PING ...")                
             if self.debug:
                 pass
             else:
@@ -682,6 +702,9 @@ class Monitor:
                     #     self.reset_update_progress()
                 else:
                     ping_fail += 1
+                    if self.led_current_blink != LONG_BLINK:
+                        self.blink_led(*LONG_BLINK)
+                    self.log("[  MO-INFO  ] PING FAILED(%s)" % ping_fail)
 
                 if ping_fail > PING_MAX_FAIL_TIMES:
                     self.master_pid = None
@@ -691,8 +714,8 @@ class Monitor:
                         self.blink_led(*SHORT_BLINK)  # 产品出错
                         
             if not self.master_pid and not self.debug:
-                self.revive()
-            time.sleep(20)
+                threading.Thread(target=self.revive).start()
+            time.sleep(PING_INTERVAL)
                 
         self.log("[  MO-INFO  ] PING STOPPED .")
     
@@ -932,7 +955,16 @@ class Monitor:
 
             if self.is_update_cancelling(): return  # 中止升级
 
-            self.log("[  MO-INFO  ] Updating plan: from *%s* to *%s* ." % (original_version_info.get("version"), version_info.get("version")))
+            ori_version = original_version_info.get("version")
+            new_version = version_info.get("version")
+            if ori_version == new_version:
+                tips = "No need updating: from *%s* to *%s*, cancelled ." % (ori_version, new_version)
+                self.log("[  MO-INFO  ] %s" % tips)
+                self.report_update_progress((39, tips, 0))  # 升级完毕：总进度 100%
+                # self.report_update_progress((100, tips, new_version))  # 升级完毕：总进度 100%
+                return
+            else:
+                self.log("[  MO-INFO  ] Updating plan: from *%s* to *%s* ." % (ori_version, new_version))
 
             self.report_update_progress((50, "Verifying ...", 1))  # 正在校验：总进度 60%
             self.verify(unzipped_pkg=unzipped, version_info=version_info)
@@ -954,7 +986,7 @@ class Monitor:
             errors.extend(updateManager.step_update()) # 升级
 
             if errors: raise Exception("\n\t".join(errors))
-            self.report_update_progress((100, "Successfully backupped and updated .", version_info.get("version")))  # 备份并升级完毕：总进度 100%
+            self.report_update_progress((100, "Successfully backupped and updated .", new_version))  # 备份并升级完毕：总进度 100%
             
             self.log("[  MO-INFO  ] PRODUCT SUCCESSFULLY UPDATED .")
             self.blink_led(*LONG_BLINK)
@@ -1008,7 +1040,7 @@ class Monitor:
                 errors.extend(updateManager.update()) # 更新
                 self.log("[  MO-INFO  ] PRODUCT RECOVERED .")
                 self.blink_led(*LONG_BLINK)
-                self.revive()
+                threading.Thread(target=self.revive).start()
             except Exception as E:
                 errors.append("%s" % E)
             
@@ -1088,15 +1120,15 @@ class Monitor:
         notify = threading.Thread(target=self._ping, args=(respond,))
         notify.start()
         notify.join(timeout=timeout)
-        
+        self.log("[  MO-INFO  ] Ping-Pong report: %s" % respond.payload)
         return respond.payload
 
     # @LOCAL
     def _ping(self, respond):
         try:
-            a = self.client.ping()
-            self.log("[  MO-INFO  ] Ping-Pong result: %s" % a)
-            respond.payload = a
+            result = self.client.ping()
+            self.log("[  MO-INFO  ] Ping-Pong result: %s" % result)
+            respond.payload = result
         except Exception as E:
             self.log("[  MO-INFO  ] Ping-Pong error: %s" % E)
             respond.payload = None
@@ -1115,7 +1147,7 @@ if __name__ == '__main__':
     try:
         config_file = sys.argv[1]
     except:
-        config_file = "./mysetting.json"
+        config_file = "/usr/local/hyt/vigmonitor/mysetting.json"
 
     if os.path.isfile(config_file):
         print("[  MO-INFO  ] Configuration file selected: %s" % config_file)

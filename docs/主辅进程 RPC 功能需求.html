@@ -11975,18 +11975,20 @@ div#notebook {
 <li><p>0 = 主进程已启动完毕。（无返回值）</p>
 </li>
 <li><p>1 = 升级文件等待下载。辅助进程收到后，应前往下载，完毕后告知主进程。返回值：</p>
-<div class="highlight"><pre><span></span><span class="err">//</span> <span class="err">成功</span>
+</li>
+</ul>
+<div class="highlight"><pre><span></span><span class="c1">// 成功</span>
 <span class="p">{</span>
-  <span class="err">status:</span> <span class="err">0,</span>
-  <span class="err">message:</span> <span class="nt">&quot;&quot;</span>
+    <span class="nx">status</span><span class="o">:</span> <span class="mi">0</span><span class="p">,</span>
+    <span class="nx">message</span><span class="o">:</span> <span class="s2">&quot;&quot;</span>
 <span class="p">}</span>
-<span class="err">//</span> <span class="err">失败</span>
+<span class="c1">// 失败</span>
 <span class="p">{</span>
-  <span class="err">status:</span> <span class="err">1,</span>
-  <span class="err">message:</span><span class="nt">&quot;失败原因（如：已有升级事务在进行，请先中止）&quot;</span>
+    <span class="nx">status</span><span class="o">:</span> <span class="mi">1</span><span class="p">,</span>
+    <span class="nx">message</span><span class="o">:</span><span class="s2">&quot;失败原因（如：已有升级事务在进行，请先中止）&quot;</span>
 <span class="p">}</span>
 </pre></div>
-</li>
+<ul>
 <li><p>2 = 已进入发现模式。（无返回值）</p>
 </li>
 <li><p>3 = 已退出发现模式。（无返回值）</p>
@@ -11994,48 +11996,48 @@ div#notebook {
 <li><p>4 = 错误。（无返回值）</p>
 </li>
 <li><p>5 = 中止升级。返回值：</p>
-<div class="highlight"><pre><span></span><span class="err">//</span> <span class="err">成功</span>
-<span class="p">{</span>
-  <span class="err">status:</span> <span class="err">0,</span>
-  <span class="err">message:</span> <span class="nt">&quot;&quot;</span>
-<span class="p">}</span>
-<span class="err">//</span> <span class="err">失败</span>
-<span class="p">{</span>
-  <span class="err">status:</span> <span class="err">1,</span>
-  <span class="err">message:</span><span class="nt">&quot;失败原因（如：已有中止事务在进行，无法重复中止，请耐心等候当前中止完成）&quot;</span>
-<span class="p">}</span>
-</pre></div>
 </li>
 </ul>
+<div class="highlight"><pre><span></span><span class="c1">// 成功</span>
+<span class="p">{</span>
+    <span class="nx">status</span><span class="o">:</span> <span class="mi">0</span><span class="p">,</span>
+    <span class="nx">message</span><span class="o">:</span> <span class="s2">&quot;&quot;</span>
+<span class="p">}</span>
+<span class="c1">// 失败</span>
+<span class="p">{</span>
+    <span class="nx">status</span><span class="o">:</span> <span class="mi">1</span><span class="p">,</span>
+    <span class="nx">message</span><span class="o">:</span><span class="s2">&quot;失败原因（如：已有中止事务在进行，无法重复中止，请耐心等候当前中止完成）&quot;</span>
+<span class="p">}</span>
+</pre></div>
 <h3 id="update(info)"><span style="color: #dd4b39;">update(info)</span><a class="anchor-link" href="#update(info)">&#182;</a></h3><p>　　升级。参数 <code>info</code> =</p>
 <div class="highlight"><pre><span></span><span class="p">{</span>
-    <span class="nt">&quot;url&quot;</span><span class="p">:</span> <span class="s2">&quot;升级包地址&quot;</span><span class="p">,</span>
-    <span class="nt">&quot;tid&quot;</span><span class="p">:</span> <span class="s2">&quot;升级事务 id&quot;</span><span class="p">,</span>
-    <span class="err">//</span> <span class="err">其它</span>
+    <span class="s2">&quot;url&quot;</span><span class="o">:</span> <span class="s2">&quot;升级包地址&quot;</span><span class="p">,</span>
+    <span class="s2">&quot;tid&quot;</span><span class="o">:</span> <span class="s2">&quot;升级事务 id&quot;</span><span class="p">,</span>
+    <span class="c1">// 其它</span>
 <span class="p">}</span>
 </pre></div>
 <p>　　返回值：</p>
-<div class="highlight"><pre><span></span><span class="err">//</span> <span class="err">成功</span>
+<div class="highlight"><pre><span></span><span class="c1">// 成功</span>
 <span class="p">{</span>
-    <span class="err">status:</span> <span class="err">0,</span>
-    <span class="err">message:</span> <span class="nt">&quot;&quot;</span>
+    <span class="nx">status</span><span class="o">:</span> <span class="mi">0</span><span class="p">,</span>
+    <span class="nx">message</span><span class="o">:</span> <span class="s2">&quot;&quot;</span>
 <span class="p">}</span>
-<span class="err">//</span> <span class="err">失败</span>
+<span class="c1">// 失败</span>
 <span class="p">{</span>
-    <span class="err">status:</span> <span class="err">1,</span>
-    <span class="err">message:</span><span class="nt">&quot;失败原因（如：已有升级事务在进行，请先中止）&quot;</span>
+    <span class="nx">status</span><span class="o">:</span> <span class="mi">1</span><span class="p">,</span>
+    <span class="nx">message</span><span class="o">:</span><span class="s2">&quot;失败原因（如：已有升级事务在进行，请先中止）&quot;</span>
 <span class="p">}</span>
 </pre></div>
 <h3 id="cancelUpdate()"><span style="color: #dd4b39;">cancelUpdate()</span><a class="anchor-link" href="#cancelUpdate()">&#182;</a></h3><p>　　中止升级。返回值：</p>
-<div class="highlight"><pre><span></span><span class="err">//</span> <span class="err">成功</span>
+<div class="highlight"><pre><span></span><span class="c1">// 成功</span>
 <span class="p">{</span>
-    <span class="err">status:</span> <span class="err">0,</span>
-    <span class="err">message:</span> <span class="nt">&quot;&quot;</span>
+    <span class="nx">status</span><span class="o">:</span> <span class="mi">0</span><span class="p">,</span>
+    <span class="nx">message</span><span class="o">:</span> <span class="s2">&quot;&quot;</span>
 <span class="p">}</span>
-<span class="err">//</span> <span class="err">失败</span>
+<span class="c1">// 失败</span>
 <span class="p">{</span>
-    <span class="err">status:</span> <span class="err">1,</span>
-    <span class="err">message:</span><span class="nt">&quot;失败原因（如：已有中止事务在进行，无法重复中止，请耐心等候当前中止完成）&quot;</span>
+    <span class="nx">status</span><span class="o">:</span> <span class="mi">1</span><span class="p">,</span>
+    <span class="nx">message</span><span class="o">:</span><span class="s2">&quot;失败原因（如：已有中止事务在进行，无法重复中止，请耐心等候当前中止完成）&quot;</span>
 <span class="p">}</span>
 </pre></div>
 <h3 id="isUpdating()"><span style="color: #dd4b39;">isUpdating()</span><a class="anchor-link" href="#isUpdating()">&#182;</a></h3><p>　　是否正在升级。返回值：</p>

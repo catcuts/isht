@@ -45,10 +45,9 @@ class MassStorageUSBListerner:
     def listrening(self):
         try:
             while self.status != "stop":
-                # self.log("meow ...")
                 self.find()
                 if self.interval: time.sleep(self.interval)
-                self.log("meow ...")
+                # self.log("meow ...")
         except KeyboardInterrupt:
             pass
         self.log("[  UL-INFO  ] Listerning stopped .")
@@ -106,7 +105,7 @@ class MassStorageUSBListerner:
         if self.logfile:
             with open(self.logfile, "a") as f:
                 print(logline, file=f)
-        if screen or not self.logfile: print(logline)
+        if screen or not self.logfile: print(logline, flush=True)
 
 if __name__ == "__main__":
 

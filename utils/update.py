@@ -209,11 +209,14 @@ class UpdateManager:
         if not self.errors:
             self.status = "update"
             self.printl("\nupdating...\ntarget: %s" %self.dist)
-            if self.copyFiles(src,self.dist):
+            err = self.copyFiles(src,self.dist)
+            if err:
+                self.errors.append(err)
+                if recover_if_error:
+                    self.printl("update failed.\n\ntarget recovering...")
+                    self.recover()
+            else:
                 self.printl("update compelete.")
-            elif recover_if_error:
-                self.printl("update failed.\n\ntarget recovering...")
-                self.recover()
 
         self.printl("\nrelated info: ")
         self.printl("\tsrc: %s" %self.src)
@@ -273,18 +276,21 @@ class UpdateManager:
                 try:
                     shutil.copy(sourceFilePath,targetFilePath)
                 except Exception as error:
-                    self.printl("copy failed: %s" %error)
-                    return False
+                    err = "copy failed: %s" %error
+                    self.printl(err)
+                    return err
                 except KeyboardInterrupt as error:
-                    self.printl("copy Interrupted by someone: %s" %error)
-                    return False
+                    err = "copy Interrupted by someone: %s" %error
+                    self.printl(err)
+                    return err
 
                 if os.path.isfile(targetFilePath) and self.getFileMD5(sourceFilePath) == self.getFileMD5(targetFilePath):
                     self.printl("\tcopy success")
                 else:
-                    self.printl("\tcopy failed: MD5 check is not ok by an unexpected error.")
-                    return False
-        return True
+                    err = "\tcopy failed: MD5 check is not ok by an unexpected error."
+                    self.printl(err)
+                    return err
+        return ""
 
     # 打印到日志
     def printl(self,logline):
@@ -299,11 +305,11 @@ class UpdateManager:
         if status == "idle":
             with open(logfile,"w") as f:
                 print(logline,file=f)
-                print(logline)
+                print(logline,flush=True)
         else:
             with open(logfile,"a") as f:
                 print(logline,file=f)
-                print(logline)
+                print(logline,flush=True)
 
 if __name__ == "__main__":
     """"

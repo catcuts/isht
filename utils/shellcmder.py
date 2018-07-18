@@ -3,6 +3,9 @@
 import os
 import subprocess
 
+def _print(line):
+    print(line, flush=True)
+
 class MountingError(Exception):
     pass
 
@@ -18,13 +21,13 @@ class ShellCommander:
         # parameter should be string type
         if not isinstance(dev, str) or not isinstance(point, str):
             err = "cannot mount %s on %s" % (dev, point)
-            print("MountingError: %s" % err)
+            _print("MountingError: %s" % err)
             raise MountingError(err)
 
         # point should not be an existing file
         if os.path.isfile(point):
             err = "mounting point <%s> is an existing file, but a directory is required" % point
-            print("MountingError: %s" % err)
+            _print("MountingError: %s" % err)
             raise MountingError(err)
     
         if os.path.exists(point):  # point is an existing directory
@@ -36,7 +39,7 @@ class ShellCommander:
                     # return
                 else:
                     err = "%s not available for mounting" % point
-                    print("MountingError: %s" % err)
+                    _print("MountingError: %s" % err)
                     raise MountingError(err)
             
             # or this dev has already mounted on this point
@@ -53,16 +56,16 @@ class ShellCommander:
         stdout, stderr = pipe.stdout.read().decode(), pipe.stderr.read().decode()
 
         if stderr:
-            print("MountingError: %s" % stderr)
+            _print("MountingError: %s" % stderr)
             raise MountingError(stderr)
         
         check_mounted = ShellCommander.check_dev_mounted_on_point(dev, point)
         if check_mounted:
-            print("successfully mounted %s on %s" % (dev, point))
+            _print("successfully mounted %s on %s" % (dev, point))
             return True
         else:
             err = "failed to mount %s on %s" % (dev, point)
-            print("MountingError: %s" % err)
+            _print("MountingError: %s" % err)
             raise MountingError(err)
 
     @staticmethod
@@ -94,7 +97,7 @@ class ShellCommander:
         stdout, stderr = pipe.stdout.read().decode(), pipe.stderr.read().decode()
         
         if stderr:
-            print("Failed to unmount %s from %s: %s" % (dev, point, stderr))
+            _print("Failed to unmount %s from %s: %s" % (dev, point, stderr))
             raise MountingError(stderr)
         else:
-            print("Successfully unmounted %s from %s" % (dev, point))
+            _print("Successfully unmounted %s from %s" % (dev, point))
