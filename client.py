@@ -34,7 +34,8 @@ default_config = {
         "reset": "PA9"
     },
     "gpio_outputs": {
-        "led": "STATUS_LED"
+        "led": "STATUS_LED",
+        "power_status": "gpio1p26"
     },
     
     # FILES AND FOLDERS
@@ -133,6 +134,10 @@ REPORT_PROGRESS_INTERVAL = 0.5
 DARK = 0
 LIGHT = 1
 
+# power status
+POWER_ON = 1
+POWER_OFF = 0
+
 class Respond:
     def __init__(self):
         self.payload = None
@@ -203,6 +208,7 @@ class Monitor:
         # threading.Thread(target=self.server.start, args=()).start()
         try:
             self.init_gpio_monitoring()
+            # self.indicate_power_status(POWER_ON)  # don't need to indicate POWER_OFF, since it will be automatically indicated after power is off.
             self.start_gpio_monitoring()
             self.blink_led(*LONG_BLINK)
             # self.start_env_monitoring()
@@ -437,6 +443,7 @@ class Monitor:
             reset_count = 1
             set_count = 1
             led_blink_last = ()
+            discover_on_accepted = False
             
             meow = 1
             while (100 != self.update_progress[0] != 0) and (self.update_progress[2] != 0):
@@ -533,7 +540,7 @@ class Monitor:
                         self.restart()
                     
                     elif time_kept_set >= 3:
-                        self.discover_on()
+                        discover_on_accepted = self.discover_on()
             
             enable_reset = (gpio.input(reset_button) == gpio.HIGH)
             reset_noted = False
@@ -547,9 +554,13 @@ class Monitor:
             time_kept_set = 0
             time_kept_set_last = 0
 
-            if led_blink_last:  # 恢复 led 上一次的闪烁方式
+            if led_blink_last and not discover_on_accepted:  # 恢复 led 上一次的闪烁方式
                 self.blink_led(*led_blink_last)
                 led_blink_last = ()
+
+    def indicate_power_status(self, status):
+        gpio.output(self.gpio.get("power_status"), status)
+        sleep(0.1)
 
     def dark_led(self):
         self.led_stop = True
@@ -623,13 +634,17 @@ class Monitor:
         else:  # 产品出错
             self.blink_led(*SHORT_BLINK)
 
+        # 不论正常退出还是出错, 都 kill 确保退出后再启动
+        self.kill()
+        threading.Thread(target=self.revive).start()
+
         self.log("[  MO-INFO  ] Restart activated !")
 
     # @RPC
     def discover_on(self):
         if self.discover_mode_on:
             self.log("[  MO-INFO  ] Discover mode is on, re-activating it is not allowed .")
-            return
+            return False
             
         self.log("[  MO-INFO  ] Discover mode is going to be activated !")
 
@@ -650,8 +665,10 @@ class Monitor:
             self.blink_led(*LONG_BLINK)
             self.log("[  MO-INFO  ] Discover mode activated !")
             # DISCOVER_MODE_DEACTIVATED will be notified by master
+            return True
         else:
             self.log("[  MO-INFO  ] Discover mode FAILED activated !")
+            return False
 
     def discover_off(self):
         self.discover_mode_on = False
@@ -692,7 +709,7 @@ class Monitor:
                     self.master_pid = pong
                     ping_fail = 0
                     killed = False
-                    if self.led_current_blink != ALWAYS_ON:
+                    if (self.led_current_blink != ALWAYS_ON) and not self.discover_mode_on:
                         self.blink_led(*ALWAYS_ON)  # 正常工作
                     if first_ping:
                         self.log("[  MO-INFO  ] FIRST PING !") 
